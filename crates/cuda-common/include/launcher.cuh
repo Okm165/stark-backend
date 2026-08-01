@@ -6,7 +6,13 @@
 #include <cstdio>
 #endif
 
+// ROCm/HIP #2212: shared-memory inter-warp reductions miscompile at block
+// sizes > 256 on gfx1100 (RDNA3).  Cap the default to 256 on AMD.
+#if defined(__HIPCC__)
+static const size_t MAX_THREADS = 256;
+#else
 static const size_t MAX_THREADS = 1024;
+#endif
 static const size_t WARP_SIZE = 32;
 
 inline size_t div_ceil(size_t a, size_t b) { return (a + b - 1) / b; }
@@ -19,6 +25,15 @@ inline std::pair<dim3, dim3> kernel_launch_params(
         return std::make_pair(dim3(0, 1, 1), dim3(1, 1, 1));
     }
     size_t block = std::min(count, threads_per_block);
+    // Round block size up to a WARP_SIZE multiple: on AMD, __shfl_down from
+    // inactive lanes returns stale VGPR data (not 0 as on NVIDIA), corrupting
+    // any warp-level reduction in a partial warp.
+    // Skip rounding when threads_per_block < WARP_SIZE: callers that explicitly
+    // request a small block.x will set additional dimensions (block.y/z), and
+    // rounding would push the total thread count over the hardware maximum.
+    if (threads_per_block >= WARP_SIZE) {
+        block = ((block + WARP_SIZE - 1) / WARP_SIZE) * WARP_SIZE;
+    }
     size_t grid = div_ceil(count, block);
     return std::make_pair(dim3(grid, 1, 1), dim3(block, 1, 1));
 }
