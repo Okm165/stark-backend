@@ -106,27 +106,39 @@ __global__ void stacked_reduction_round0_block_sum_kernel(
     uint32_t x_int = tidx >> l_skip;
     uint32_t col_idx = blockIdx.y;
 
-    // Compute G weights (no z-dependent packets needed)
-    FpExt eq_cube = get_eq_cube(eq_r_ns, num_x, x_int);
-    FpExt eq_cube_rot_prev = get_eq_cube(eq_r_ns, num_x, rot_prev(x_int, num_x));
-    FpExt k_rot_diff = eq_cube_rot_prev - eq_cube;
+    // Guard against extra threads from WARP_SIZE-aligned block rounding.
+    // On AMD/HIP, __shfl_down from inactive lanes returns stale data, so
+    // block sizes are rounded up to WARP_SIZE multiples. Extra threads must
+    // write zeros to shared memory so the subsequent reduction is correct.
+    uint32_t lifted_height = num_x << l_skip;
+    if (tidx < lifted_height) {
+        // Compute G weights (no z-dependent packets needed)
+        FpExt eq_cube = get_eq_cube(eq_r_ns, num_x, x_int);
+        FpExt eq_cube_rot_prev = get_eq_cube(eq_r_ns, num_x, rot_prev(x_int, num_x));
+        FpExt k_rot_diff = eq_cube_rot_prev - eq_cube;
 
-    FpExt coeff_eq = lambda_pows[2 * col_idx];      // for G0
-    FpExt coeff_rot = lambda_pows[2 * col_idx + 1]; // for G1, G2
+        FpExt coeff_eq = lambda_pows[2 * col_idx];      // for G0
+        FpExt coeff_rot = lambda_pows[2 * col_idx + 1]; // for G1, G2
 
-    FpExt w0 = coeff_eq * eq_cube;      // weight for G0
-    FpExt w1 = coeff_rot * eq_cube;     // weight for G1
-    FpExt w2 = coeff_rot * k_rot_diff;  // weight for G2
+        FpExt w0 = coeff_eq * eq_cube;      // weight for G0
+        FpExt w1 = coeff_rot * eq_cube;     // weight for G1
+        FpExt w2 = coeff_rot * k_rot_diff;  // weight for G2
 
-    // Load trace value (identity coset only, no NTT needed)
-    auto evals = trace_ptr + col_idx * height + (x_int << (l_skip - log_stride));
-    auto stride_mask = (1u << log_stride) - 1;
-    Fp q = (z_idx & stride_mask) == 0 ? evals[z_idx >> log_stride] : Fp::zero();
+        // Load trace value (identity coset only, no NTT needed)
+        auto evals = trace_ptr + col_idx * height + (x_int << (l_skip - log_stride));
+        auto stride_mask = (1u << log_stride) - 1;
+        Fp q = (z_idx & stride_mask) == 0 ? evals[z_idx >> log_stride] : Fp::zero();
 
-    // Store 3 partial sums to shared memory
-    shared_sum[0 * PADDED_X + threadIdx.x] = w0 * q;
-    shared_sum[1 * PADDED_X + threadIdx.x] = w1 * q;
-    shared_sum[2 * PADDED_X + threadIdx.x] = w2 * q;
+        // Store 3 partial sums to shared memory
+        shared_sum[0 * PADDED_X + threadIdx.x] = w0 * q;
+        shared_sum[1 * PADDED_X + threadIdx.x] = w1 * q;
+        shared_sum[2 * PADDED_X + threadIdx.x] = w2 * q;
+    } else {
+        FpExt zero(Fp::zero());
+        shared_sum[0 * PADDED_X + threadIdx.x] = zero;
+        shared_sum[1 * PADDED_X + threadIdx.x] = zero;
+        shared_sum[2 * PADDED_X + threadIdx.x] = zero;
+    }
 
     __syncthreads();
 
@@ -543,7 +555,11 @@ extern "C" int _stacked_reduction_sumcheck_mle_round_degenerate(
     uint32_t l_skip,
     uint32_t round, cudaStream_t stream) {
     auto shift_factor = l_skip + round;
-    dim3 block(std::min(window_len, 256u));
+    uint32_t raw_block = std::min(window_len, 256u);
+    // Round to WARP_SIZE multiple: on AMD, __shfl_down from inactive lanes in a
+    // partial warp returns stale data, corrupting warp_reduce_sum.
+    uint32_t rounded_block = ((raw_block + WARP_SIZE - 1) / WARP_SIZE) * WARP_SIZE;
+    dim3 block(rounded_block);
     dim3 grid(1);
     // block.x <= 512 < 2^32 so atomic u64 will not overflow
     size_t shmem_bytes = div_ceil(block.x, WARP_SIZE) * sizeof(FpExt);
