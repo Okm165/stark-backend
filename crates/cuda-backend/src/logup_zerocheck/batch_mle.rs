@@ -29,6 +29,14 @@ use crate::{
 };
 
 const MAX_THREADS_PER_BLOCK: u32 = 128;
+const WARP_SIZE: u32 = 32;
+
+/// Round up to the nearest multiple of WARP_SIZE (32). On AMD, `__shfl_down`
+/// from inactive lanes in partial warps returns stale VGPR data, corrupting
+/// warp-level reductions.
+fn round_to_warp(n: u32) -> u32 {
+    n.div_ceil(WARP_SIZE) * WARP_SIZE
+}
 
 // ============================================================================
 // Memory calculation helpers
@@ -150,7 +158,7 @@ impl<'a> ZerocheckMleBatchBuilder<'a> {
 
         // Compute threads_per_block from max_num_y
         let max_num_y = traces.iter().map(|t| t.num_y).max().unwrap_or(0);
-        let threads_per_block = max_num_y.min(MAX_THREADS_PER_BLOCK);
+        let threads_per_block = round_to_warp(max_num_y.min(MAX_THREADS_PER_BLOCK));
 
         let (block_ctxs_h, air_offsets) =
             build_block_ctxs(traces.iter().map(|t| t.num_y.div_ceil(threads_per_block)));
@@ -289,7 +297,7 @@ impl<'a> LogupMleBatchBuilder<'a> {
 
         // Compute threads_per_block from max_num_y
         let max_num_y = traces.iter().map(|t| t.num_y).max().unwrap_or(0);
-        let threads_per_block = max_num_y.min(MAX_THREADS_PER_BLOCK);
+        let threads_per_block = round_to_warp(max_num_y.min(MAX_THREADS_PER_BLOCK));
 
         let (block_ctxs_h, air_offsets) =
             build_block_ctxs(traces.iter().map(|t| t.num_y.div_ceil(threads_per_block)));
