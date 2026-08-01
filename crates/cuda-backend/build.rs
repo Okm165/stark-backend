@@ -1,8 +1,10 @@
 use std::process::exit;
 
-use openvm_cuda_builder::{cuda_available, CudaBuilder};
+use openvm_cuda_builder::{cuda_available, emit_gpu_vendor_cfg, CudaBuilder};
 
 fn main() {
+    println!("cargo::rustc-check-cfg=cfg(gpu_vendor_amd)");
+    emit_gpu_vendor_cfg();
     if !cuda_available() {
         eprintln!("cargo:warning=CUDA is not available");
         exit(1);
