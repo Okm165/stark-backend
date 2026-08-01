@@ -5,9 +5,12 @@ use std::{
 
 use thiserror::Error;
 
-#[link(name = "cudart")]
+#[cfg_attr(not(gpu_vendor_amd), link(name = "cudart"))]
+#[cfg_attr(gpu_vendor_amd, link(name = "amdhip64"))]
 extern "C" {
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipGetErrorString")]
     fn cudaGetErrorString(error: c_int) -> *const c_char;
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipGetErrorName")]
     fn cudaGetErrorName(error: c_int) -> *const c_char;
 }
 

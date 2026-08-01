@@ -31,9 +31,12 @@ use std::{
 
 use crate::{error::CudaError, stream::device_synchronize};
 
-#[link(name = "cudart")]
+#[cfg_attr(not(gpu_vendor_amd), link(name = "cudart"))]
+#[cfg_attr(gpu_vendor_amd, link(name = "amdhip64"))]
 extern "C" {
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipHostRegister")]
     fn cudaHostRegister(ptr: *mut c_void, size: usize, flags: u32) -> i32;
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipHostUnregister")]
     fn cudaHostUnregister(ptr: *mut c_void) -> i32;
 }
 

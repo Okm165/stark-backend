@@ -7,18 +7,30 @@ use std::{
 
 use crate::error::{check, CudaError};
 
-#[link(name = "cudart")]
+#[cfg_attr(not(gpu_vendor_amd), link(name = "cudart"))]
+#[cfg_attr(gpu_vendor_amd, link(name = "amdhip64"))]
 extern "C" {
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipDeviceSynchronize")]
     fn cudaDeviceSynchronize() -> i32;
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipStreamCreateWithFlags")]
     fn cudaStreamCreateWithFlags(stream: *mut cudaStream_t, flags: u32) -> i32;
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipStreamDestroy")]
     fn cudaStreamDestroy(stream: cudaStream_t) -> i32;
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipStreamSynchronize")]
     fn cudaStreamSynchronize(stream: cudaStream_t) -> i32;
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipStreamWaitEvent")]
     fn cudaStreamWaitEvent(stream: cudaStream_t, event: cudaEvent_t, flags: u32) -> i32;
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipEventCreate")]
     fn cudaEventCreate(event: *mut cudaEvent_t) -> i32;
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipEventRecord")]
     fn cudaEventRecord(event: cudaEvent_t, stream: cudaStream_t) -> i32;
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipEventSynchronize")]
     fn cudaEventSynchronize(event: cudaEvent_t) -> i32;
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipEventQuery")]
     fn cudaEventQuery(event: cudaEvent_t) -> i32;
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipEventDestroy")]
     fn cudaEventDestroy(event: cudaEvent_t) -> i32;
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipEventElapsedTime")]
     fn cudaEventElapsedTime(ms: *mut f32, start: cudaEvent_t, end: cudaEvent_t) -> i32;
 }
 
