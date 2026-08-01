@@ -43,7 +43,7 @@ struct FpExt {
     };
     
     /// Default constructor makes the zero elements
-    __device__ FpExt() : rep(bb31_t{0u}) {}
+    __host__ __device__ FpExt() : rep(bb31_t{0u}) {}
 
     /// Initialize from uint32_t
     __device__ explicit FpExt(uint32_t x) : rep(bb31_t{x}) {}

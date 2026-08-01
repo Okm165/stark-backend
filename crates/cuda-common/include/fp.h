@@ -71,7 +71,7 @@ private:
 
 public:
     /// Add default constructor explicitly
-    __device__ constexpr Fp() : bb31_t(0) {}
+    __host__ __device__ constexpr Fp() : bb31_t(0) {}
     
     /// Constructor from bb31_t for explicit conversion
     __device__ explicit constexpr Fp(const bb31_t& b) : bb31_t(b) {}
