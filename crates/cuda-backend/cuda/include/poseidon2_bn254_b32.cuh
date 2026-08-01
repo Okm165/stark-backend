@@ -6,7 +6,12 @@ namespace bn254_b32 {
 
 // ---------------------------------------------------------------------------
 // 256-bit helpers: wrapping add/sub with carry/borrow
+//
+// NVIDIA: inline PTX for carry-chain instructions (add.cc, sub.cc, mad.hi.cc).
+// HIP/AMD: portable uint64_t fallbacks (identical-quality v_add_co_u32 chains).
 // ---------------------------------------------------------------------------
+
+#ifdef __CUDA_ARCH__ // ─── NVIDIA PTX path ───
 
 // Inline PTX: emit an explicit add.cc.u32 / addc.cc.u32 chain 
 static __device__ __forceinline__ uint32_t
@@ -229,6 +234,60 @@ mul_small_and_acc(uint32_t high[8], const uint32_t lhs[8], uint32_t rhs, const u
     high[7] = r8;
     return r0;
 }
+
+#else // ─── Portable path (HIP / non-CUDA) ───
+
+static __device__ __forceinline__ uint32_t
+add256_ret(uint32_t r[8], const uint32_t a[8], const uint32_t b[8]) {
+    uint32_t carry = 0;
+    for (int i = 0; i < 8; i++) {
+        uint64_t sum = (uint64_t)a[i] + b[i] + carry;
+        r[i] = (uint32_t)sum;
+        carry = (uint32_t)(sum >> 32);
+    }
+    return carry;
+}
+
+static __device__ __forceinline__ uint32_t
+sub256_ret(uint32_t r[8], const uint32_t a[8], const uint32_t b[8]) {
+    uint32_t borrow = 0;
+    for (int i = 0; i < 8; i++) {
+        uint64_t diff = (uint64_t)a[i] - b[i] - borrow;
+        r[i] = (uint32_t)diff;
+        borrow = (uint32_t)(diff >> 63) & 1u;
+    }
+    return borrow;
+}
+
+static __device__ __forceinline__ uint32_t
+mul_small(uint32_t high[8], const uint32_t lhs[8], uint32_t rhs) {
+    uint64_t carry = 0;
+    uint32_t r0;
+    for (int i = 0; i < 8; i++) {
+        uint64_t prod = (uint64_t)lhs[i] * rhs + carry;
+        if (i == 0) r0 = (uint32_t)prod;
+        else high[i - 1] = (uint32_t)prod;
+        carry = prod >> 32;
+    }
+    high[7] = (uint32_t)carry;
+    return r0;
+}
+
+static __device__ __forceinline__ uint32_t
+mul_small_and_acc(uint32_t high[8], const uint32_t lhs[8], uint32_t rhs, const uint32_t add[8]) {
+    uint64_t carry = 0;
+    uint32_t r0;
+    for (int i = 0; i < 8; i++) {
+        uint64_t prod = (uint64_t)lhs[i] * rhs + add[i] + carry;
+        if (i == 0) r0 = (uint32_t)prod;
+        else high[i - 1] = (uint32_t)prod;
+        carry = prod >> 32;
+    }
+    high[7] = (uint32_t)carry;
+    return r0;
+}
+
+#endif // __CUDA_ARCH__
 
 /// Single-step Montgomery reduction by 32 bits. Given a 9-limb value laid out
 /// as (acc0, acc[0..7]) — acc0 the lowest u32 limb, acc the upper 8 — returns
