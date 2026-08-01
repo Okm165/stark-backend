@@ -16,9 +16,13 @@
 #ifndef __SPPARK_FF_BABY_BEAR_HPP__
 #define __SPPARK_FF_BABY_BEAR_HPP__
 
-#ifdef __CUDACC__   // CUDA device-side field types
+#if defined(__CUDACC__) || defined(__HIPCC__)
 # include <cassert>
-# include "mont32_t.cuh"
+# ifdef __CUDACC__
+#  include "mont32_t.cuh"
+# else
+#  include "mont32_t.hip"
+# endif
 # define inline __device__ __forceinline__
 
 using bb31_base = mont32_t<31, 0x78000001, 0x77ffffff, 0x45dddde3, 0x0ffffffe>;
