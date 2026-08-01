@@ -18,8 +18,10 @@ pub enum cudaMemcpyKind {
     cudaMemcpyDefault = 4,
 }
 
-#[link(name = "cudart")]
+#[cfg_attr(not(gpu_vendor_amd), link(name = "cudart"))]
+#[cfg_attr(gpu_vendor_amd, link(name = "amdhip64"))]
 extern "C" {
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipMemcpyAsync")]
     fn cudaMemcpyAsync(
         dst: *mut c_void,
         src: *const c_void,

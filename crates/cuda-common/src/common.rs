@@ -5,11 +5,16 @@ use std::{
 
 use crate::error::{check, CudaError};
 
-#[link(name = "cudart")]
+#[cfg_attr(not(gpu_vendor_amd), link(name = "cudart"))]
+#[cfg_attr(gpu_vendor_amd, link(name = "amdhip64"))]
 extern "C" {
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipFree")]
     fn cudaFree(dev_ptr: *mut c_void) -> i32;
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipGetDevice")]
     fn cudaGetDevice(device: *mut i32) -> i32;
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipSetDevice")]
     fn cudaSetDevice(device: i32) -> i32;
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipDeviceReset")]
     fn cudaDeviceReset() -> i32;
 }
 

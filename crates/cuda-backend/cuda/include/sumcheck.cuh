@@ -16,8 +16,8 @@ mle_interpolate_single(const Field *__restrict__ column, Fp x, uint32_t y_int) {
     return t0 + (t1 - t0) * x;
 }
 
-// Warp-level reduction: sums FpExt values across threads in a warp (32 threads)
-// Uses shuffle instructions for efficient communication within a warp
+// Warp-level reduction via __shfl_down. Requires all WARP_SIZE lanes active:
+// on AMD, inactive lanes return stale data, corrupting the sum.
 static __device__ inline FpExt warp_reduce_sum(FpExt val) {
     unsigned mask = __activemask();
 
