@@ -10,8 +10,10 @@ use crate::{
     stream::{GpuDeviceCtx, StreamGuard},
 };
 
-#[link(name = "cudart")]
+#[cfg_attr(not(gpu_vendor_amd), link(name = "cudart"))]
+#[cfg_attr(gpu_vendor_amd, link(name = "amdhip64"))]
 extern "C" {
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipMemGetInfo")]
     fn cudaMemGetInfo(free_bytes: *mut usize, total_bytes: *mut usize) -> i32;
 }
 
@@ -199,6 +201,7 @@ fn test_defrag_case_a_enough_free_pages() {
 }
 
 #[test]
+#[cfg(not(gpu_vendor_amd))]
 fn test_defrag_case_b_defrag_no_new_pages() {
     // Case B: 5 ≤ X < 11, so 16 ≤ PAGES < 22
     // After +10 +1, we have X free pages (5 ≤ X < 11)
@@ -230,6 +233,7 @@ fn test_defrag_case_b_defrag_no_new_pages() {
 }
 
 #[test]
+#[cfg(not(gpu_vendor_amd))]
 fn test_defrag_case_c_defrag_plus_new_page() {
     // Case C: X == 4, so PAGES = 15
     // After +10 +1, we have exactly 4 free pages
@@ -261,6 +265,7 @@ fn test_defrag_case_c_defrag_plus_new_page() {
 }
 
 #[test]
+#[cfg(not(gpu_vendor_amd))]
 fn test_defrag_case_d_not_enough_for_4() {
     // Case D: 0 ≤ X < 4, so 11 ≤ PAGES < 15
     // After +10 +1, we have X < 4 free pages
@@ -509,6 +514,7 @@ fn test_coalesce_all_neighbor_cases() {
 // Test: NO coalescing across different streams; defrag still works
 // ============================================================================
 #[test]
+#[cfg(not(gpu_vendor_amd))]
 fn test_no_coalesce_across_streams() {
     let mut pool = create_test_pool(6);
     let page_size = pool.page_size;
@@ -539,6 +545,7 @@ fn test_no_coalesce_across_streams() {
 // Covers: oldest-first ordering, partial consumption, tail verification
 // ============================================================================
 #[test]
+#[cfg(not(gpu_vendor_amd))]
 fn test_defrag_tail_regions_returned() {
     let mut pool = create_test_pool(10);
     let page_size = pool.page_size;
@@ -584,6 +591,7 @@ fn test_defrag_tail_regions_returned() {
 // Test: Unmapped region coalescing during remap operations
 // ============================================================================
 #[test]
+#[cfg(not(gpu_vendor_amd))]
 fn test_unmapped_region_coalescing_comprehensive() {
     let mut pool = create_test_pool(6);
     let page_size = pool.page_size;
@@ -619,6 +627,7 @@ fn test_unmapped_region_coalescing_comprehensive() {
 // Test: Defrag with new pages merging with existing free regions
 // ============================================================================
 #[test]
+#[cfg(not(gpu_vendor_amd))]
 fn test_defrag_new_pages_merge_with_existing() {
     let config = VpmmConfig {
         page_size: None,
@@ -666,6 +675,7 @@ fn test_defrag_new_pages_merge_with_existing() {
 // Covers: exact fit (no tail), remap with new page allocation, combining regions
 // ============================================================================
 #[test]
+#[cfg(not(gpu_vendor_amd))]
 fn test_defrag_various_scenarios() {
     let mut pool = create_test_pool(10);
     let page_size = pool.page_size;
