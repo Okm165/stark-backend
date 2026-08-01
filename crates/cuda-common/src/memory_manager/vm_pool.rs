@@ -15,8 +15,10 @@ use crate::{
     stream::{device_synchronize, CudaEvent, CudaStream, StreamGuard},
 };
 
-#[link(name = "cudart")]
+#[cfg_attr(not(gpu_vendor_amd), link(name = "cudart"))]
+#[cfg_attr(gpu_vendor_amd, link(name = "amdhip64"))]
 extern "C" {
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipMemGetInfo")]
     fn cudaMemGetInfo(free_bytes: *mut usize, total_bytes: *mut usize) -> i32;
 }
 
@@ -164,13 +166,18 @@ impl VirtualMemoryPool {
     pub(super) fn new(config: VpmmConfig) -> Self {
         let device_id = set_device().unwrap();
 
-        // Check VPMM support and resolve page_size
+        // Check VPMM support and resolve page_size.
         let (root, page_size, va_size) = unsafe {
             match vpmm_check_support(device_id) {
                 Ok(_) => {
                     let granularity = vpmm_min_granularity(device_id).unwrap();
 
-                    // Resolve page_size: use config override or device granularity
+                    // Resolve page_size: use config override, or a sensible default.
+                    // Some devices (e.g. AMD/ROCm) report a very small minimum
+                    // granularity (4 KB). Using that directly would require millions
+                    // of hipMemCreate/hipMemMap calls for multi-GB allocations,
+                    // taking minutes. We clamp to at least 2 MB by default.
+                    const MIN_DEFAULT_PAGE_SIZE: usize = 2 << 20; // 2 MiB
                     let page_size = match config.page_size {
                         Some(size) => {
                             assert!(
@@ -180,7 +187,16 @@ impl VirtualMemoryPool {
                             );
                             size
                         }
-                        None => granularity,
+                        None => {
+                            let clamped = MIN_DEFAULT_PAGE_SIZE.max(granularity);
+                            let clamped = clamped.next_multiple_of(granularity);
+                            tracing::debug!(
+                                "VPMM: device granularity={}, using page_size={}",
+                                ByteSize::b(granularity as u64),
+                                ByteSize::b(clamped as u64),
+                            );
+                            clamped
+                        }
                     };
 
                     // Validate va_size
@@ -570,6 +586,13 @@ impl VirtualMemoryPool {
         let mut allocated_ptr = CUdeviceptr::MAX;
 
         let mut allocated_dst = dst;
+        // AMD RDNA: the defrag path below double-maps physical pages to new
+        // VAs.  RDNA L1 caches are virtually tagged, so two VAs pointing to
+        // the same physical page cause incoherent reads (AMD HIP VMM docs).
+        // Skip free-region reuse and allocate all pages fresh instead.
+        #[cfg(gpu_vendor_amd)]
+        let mut allocate_size = requested;
+        #[cfg(not(gpu_vendor_amd))]
         let mut allocate_size = requested.saturating_sub(total_free_size);
         debug_assert_eq!(allocate_size % self.page_size, 0);
         let mut allocated_pages: Vec<(CUdeviceptr, CUmemGenericAllocationHandle)> = Vec::new();
@@ -852,6 +875,7 @@ impl std::fmt::Debug for VirtualMemoryPool {
 }
 
 #[cfg(test)]
+#[cfg(not(gpu_vendor_amd))]
 mod tests {
     use std::sync::Arc;
 

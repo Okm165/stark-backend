@@ -8,9 +8,11 @@ use std::{
 
 use bytesize::ByteSize;
 
+#[cfg(not(gpu_vendor_amd))]
+use crate::stream::cudaStream_t;
 use crate::{
     error::{check, MemoryError},
-    stream::{cudaStream_t, device_synchronize, StreamGuard},
+    stream::{device_synchronize, StreamGuard},
 };
 
 mod cuda;
@@ -20,10 +22,23 @@ use vm_pool::VirtualMemoryPool;
 #[cfg(test)]
 mod tests;
 
-#[link(name = "cudart")]
+#[cfg_attr(not(gpu_vendor_amd), link(name = "cudart"))]
+#[cfg_attr(gpu_vendor_amd, link(name = "amdhip64"))]
 extern "C" {
+    // AMD ROCm: hipMallocAsync has stream-ordering bugs that cause data
+    // corruption in multi-segment / multi-prove scenarios.  We use the
+    // synchronous hipMalloc / hipFree instead for the small-allocation path.
+    #[cfg(not(gpu_vendor_amd))]
     fn cudaMallocAsync(dev_ptr: *mut *mut c_void, size: usize, stream: cudaStream_t) -> i32;
+    #[cfg(not(gpu_vendor_amd))]
     fn cudaFreeAsync(dev_ptr: *mut c_void, stream: cudaStream_t) -> i32;
+    #[cfg(gpu_vendor_amd)]
+    #[link_name = "hipMalloc"]
+    fn cudaMalloc(dev_ptr: *mut *mut c_void, size: usize) -> i32;
+    #[cfg(gpu_vendor_amd)]
+    #[link_name = "hipFree"]
+    fn cudaFree(dev_ptr: *mut c_void) -> i32;
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipMemGetInfo")]
     fn cudaMemGetInfo(free: *mut usize, total: *mut usize) -> i32;
 }
 
@@ -84,12 +99,26 @@ impl MemoryManager {
         let mut tracked_size = size;
         let ptr = if size < self.pool.page_size {
             let mut ptr: *mut c_void = std::ptr::null_mut();
-            check(unsafe { cudaMallocAsync(&mut ptr, size, stream.as_raw()) }).map_err(|e| {
-                tracing::error!("cudaMallocAsync failed: size={}: {:?}", size, e);
-                MemoryError::from(e)
-            })?;
+            #[cfg(gpu_vendor_amd)]
+            {
+                // AMD: use synchronous hipMalloc to avoid hipMallocAsync
+                // stream-ordering bugs that corrupt data on multi-segment proves.
+                check(unsafe { cudaMalloc(&mut ptr, size) }).map_err(|e| {
+                    tracing::error!("cudaMalloc failed: size={}: {:?}", size, e);
+                    MemoryError::from(e)
+                })?;
+            }
+            #[cfg(not(gpu_vendor_amd))]
+            {
+                check(unsafe { cudaMallocAsync(&mut ptr, size, stream.as_raw()) }).map_err(
+                    |e| {
+                        tracing::error!("cudaMallocAsync failed: size={}: {:?}", size, e);
+                        MemoryError::from(e)
+                    },
+                )?;
+            }
             self.allocated_ptrs.insert(
-                NonNull::new(ptr).expect("BUG: cudaMallocAsync returned null"),
+                NonNull::new(ptr).expect("BUG: cudaMalloc(Async) returned null"),
                 AllocRecord {
                     size,
                     stream: stream.clone(),
@@ -121,10 +150,20 @@ impl MemoryManager {
         if let Some(record) = self.allocated_ptrs.remove(&nn) {
             let size = record.size;
             self.current_size -= size;
-            check(unsafe { cudaFreeAsync(ptr, record.stream.as_raw()) }).map_err(|e| {
-                tracing::error!("cudaFreeAsync failed: ptr={:p}: {:?}", ptr, e);
-                MemoryError::from(e)
-            })?;
+            #[cfg(gpu_vendor_amd)]
+            {
+                check(unsafe { cudaFree(ptr) }).map_err(|e| {
+                    tracing::error!("cudaFree failed: ptr={:p}: {:?}", ptr, e);
+                    MemoryError::from(e)
+                })?;
+            }
+            #[cfg(not(gpu_vendor_amd))]
+            {
+                check(unsafe { cudaFreeAsync(ptr, record.stream.as_raw()) }).map_err(|e| {
+                    tracing::error!("cudaFreeAsync failed: ptr={:p}: {:?}", ptr, e);
+                    MemoryError::from(e)
+                })?;
+            }
             Ok(record.stream)
         } else {
             let (freed_size, guard) = self.pool.free_internal(ptr)?;
