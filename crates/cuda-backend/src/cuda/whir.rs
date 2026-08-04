@@ -58,7 +58,7 @@ extern "C" {
 ///   The `stacked_row_start` must be the correct starting row index for the trace within the
 ///   stacked matrix.
 /// - `mu_powers` must be defined for at least the sum of the stacked widths.
-pub(crate) unsafe fn whir_algebraic_batch_traces(
+pub unsafe fn whir_algebraic_batch_traces(
     output: &mut DeviceBuffer<F>,
     packets: &DeviceBuffer<BatchingTracePacket>,
     mu_powers: &DeviceBuffer<EF>,
