@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, env, fs, path::Path, process::Command, sync::OnceLock};
+use std::{collections::BTreeSet, env, path::Path, process::Command, sync::OnceLock};
 
 /// GPU vendor detected at build time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -366,8 +366,9 @@ impl CudaBuilder {
         let opt_level = self.get_opt_level();
 
         let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
-        let stubs_dir = generate_hip_stubs(&out_dir);
-        let cuda2hip = format!("{}/cuda2hip.hpp", cuda_builder_include_dir());
+        let include_dir = cuda_builder_include_dir();
+        let stubs_dir = hip_stubs_dir();
+        let cuda2hip = format!("{include_dir}/cuda2hip.hpp");
 
         let mut base_flags: Vec<String> = Vec::new();
         base_flags.push("-fgpu-rdc".to_string());
@@ -393,6 +394,23 @@ impl CudaBuilder {
         if env::var("AMDGPU_PRECISE_MEMORY").as_deref() == Ok("1") {
             base_flags.push("-Xarch_device".to_string());
             base_flags.push("-mattr=+precise-memory".to_string());
+        }
+
+        // AMD debug mode: mirrors apply_debug_flags_nvidia for parity.
+        if env::var("CUDA_DEBUG").is_ok_and(|v| v == "1")
+            || env::var("HIP_DEBUG").is_ok_and(|v| v == "1")
+        {
+            env::set_var("CUDA_OPT_LEVEL", "0");
+            env::set_var("HIP_LAUNCH_BLOCKING", "1");
+            env::set_var("RUST_BACKTRACE", "full");
+
+            // Override opt level to 0 for debug symbols
+            base_flags.retain(|f| !f.starts_with("-O"));
+            base_flags.push("-O0".to_string());
+            base_flags.push("-g".to_string());
+            base_flags.push("-DCUDA_DEBUG=1".to_string());
+
+            println!("cargo:warning=HIP_DEBUG: O0, HIP_LAUNCH_BLOCKING=1, device debug symbols");
         }
 
         // Phase 1: compile each .cu file with -fgpu-rdc.
@@ -537,6 +555,7 @@ impl CudaBuilder {
             "HIP_ARCH",
             "HIPCC_PATH",
             "AMDGPU_PRECISE_MEMORY",
+            "HIP_DEBUG",
         ] {
             println!("cargo:rerun-if-env-changed={var}");
         }
@@ -692,50 +711,10 @@ fn cuda_builder_include_dir() -> &'static str {
     env!("CUDA_BUILDER_INCLUDE_DIR")
 }
 
-/// Generate empty/redirect stub headers in `OUT_DIR` so that CUDA `#include`
-/// directives resolve when compiling with hipcc (where the CUDA SDK is absent).
-///
-/// Empty stubs satisfy includes already covered by `cuda2hip.hpp` (which
-/// force-includes `hip/hip_runtime.h`).  CUB stubs redirect to hipCUB.
-fn generate_hip_stubs(out_dir: &str) -> String {
-    let dir = format!("{out_dir}/hip-stubs");
-    fs::create_dir_all(format!("{dir}/cub/device")).expect("failed to create hip-stubs dir");
-
-    let empty: &[&str] = &[
-        "cuda.h",
-        "cuda_runtime.h",
-        "cuda_runtime_api.h",
-        "cooperative_groups.h",
-        "vector_types.h",
-        "driver_types.h",
-        "device_atomic_functions.h",
-    ];
-    for name in empty {
-        fs::write(format!("{dir}/{name}"), "/* generated hip stub */\n")
-            .unwrap_or_else(|e| panic!("failed to write stub {name}: {e}"));
-    }
-
-    let redirects: &[(&str, &str)] = &[
-        ("cub/cub.cuh", "#include <hipcub/hipcub.hpp>\n"),
-        (
-            "cub/device/device_reduce.cuh",
-            "#include <hipcub/device/device_reduce.hpp>\n",
-        ),
-        (
-            "cub/device/device_merge_sort.cuh",
-            "#include <hipcub/device/device_merge_sort.hpp>\n",
-        ),
-        (
-            "cub/device/device_scan.cuh",
-            "#include <hipcub/device/device_scan.hpp>\n",
-        ),
-    ];
-    for (name, content) in redirects {
-        fs::write(format!("{dir}/{name}"), content)
-            .unwrap_or_else(|e| panic!("failed to write stub {name}: {e}"));
-    }
-
-    dir
+/// Path to the generated hip-stubs directory (in OUT_DIR at build time).
+/// Contains minimal headers that redirect CUDA includes to HIP equivalents.
+fn hip_stubs_dir() -> &'static str {
+    env!("HIP_STUBS_DIR")
 }
 
 /// Resolve the path to `hipcc`.
