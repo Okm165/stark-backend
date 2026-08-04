@@ -37,19 +37,9 @@ namespace cub = hipcub;
 // for overloaded ones or constants.
 
 // Device management
-static const auto cudaGetDeviceCount      = hipGetDeviceCount;
 static const auto cudaGetDevice           = hipGetDevice;
 static const auto cudaSetDevice           = hipSetDevice;
-static const auto cudaDeviceSynchronize   = hipDeviceSynchronize;
 static const auto cudaDeviceGetAttribute  = hipDeviceGetAttribute;
-#define cudaDeviceReset hipDeviceReset
-
-// Device properties
-using cudaDeviceProp = hipDeviceProp_t;
-static const auto cudaGetDeviceProperties = hipGetDeviceProperties;
-
-// Memory info
-static const auto cudaMemGetInfo = hipMemGetInfo;
 
 // Memory copy
 using cudaMemcpyKind = hipMemcpyKind;
@@ -62,27 +52,6 @@ static const auto cudaMemcpyAsync = hipMemcpyAsync;
 // Symbol copy (overloaded in HIP — must use #define)
 #define cudaMemcpyToSymbol      hipMemcpyToSymbol
 #define cudaMemcpyToSymbolAsync hipMemcpyToSymbolAsync
-
-// Memset
-static const auto cudaMemsetAsync = hipMemsetAsync;
-
-// Allocation
-template<typename T>
-static inline hipError_t cudaMalloc(T** p, size_t size) {
-    return hipMalloc(p, size);
-}
-static const auto cudaFree = hipFree;
-
-template<typename T>
-static inline hipError_t cudaMallocAsync(T** p, size_t size, hipStream_t stream) {
-    return hipMallocAsync(p, size, stream);
-}
-static const auto cudaFreeAsync = hipFreeAsync;
-
-// Host memory
-static const auto cudaHostRegister   = hipHostRegister;
-static const auto cudaHostUnregister = hipHostUnregister;
-#define cudaHostRegisterDefault hipHostRegisterDefault
 
 // Error handling
 using cudaError_t = hipError_t;
@@ -101,16 +70,6 @@ static const auto cudaStreamCreateWithFlags = hipStreamCreateWithFlags;
 static const auto cudaStreamDestroy         = hipStreamDestroy;
 static const auto cudaStreamSynchronize     = hipStreamSynchronize;
 static const auto cudaStreamWaitEvent       = hipStreamWaitEvent;
-#define cudaStreamNonBlocking hipStreamNonBlocking
-
-// Events
-using cudaEvent_t = hipEvent_t;
-static const auto cudaEventCreate       = hipEventCreate;
-static const auto cudaEventRecord       = hipEventRecord;
-static const auto cudaEventSynchronize  = hipEventSynchronize;
-static const auto cudaEventQuery        = hipEventQuery;
-static const auto cudaEventDestroy      = hipEventDestroy;
-static const auto cudaEventElapsedTime  = hipEventElapsedTime;
 
 // Device attribute constants
 #define cudaDevAttrMultiProcessorCount \
