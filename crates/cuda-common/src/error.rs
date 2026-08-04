@@ -5,9 +5,7 @@ use std::{
 
 use thiserror::Error;
 
-#[cfg_attr(not(gpu_vendor_amd), link(name = "cudart"))]
-#[cfg_attr(gpu_vendor_amd, link(name = "amdhip64"))]
-extern "C" {
+crate::gpu_link! {
     #[cfg_attr(gpu_vendor_amd, link_name = "hipGetErrorString")]
     fn cudaGetErrorString(error: c_int) -> *const c_char;
     #[cfg_attr(gpu_vendor_amd, link_name = "hipGetErrorName")]
@@ -62,11 +60,15 @@ impl CudaError {
         }
     }
 
-    /// Returns `true` if the error is cudaErrorMemoryAllocation
+    /// Returns `true` if the error is cudaErrorMemoryAllocation / hipErrorOutOfMemory.
+    /// Error code 2 on both CUDA and HIP platforms.
     #[inline]
     pub fn is_out_of_memory(&self) -> bool {
-        self.code == 2
+        self.code == Self::ERROR_OUT_OF_MEMORY
     }
+
+    /// cudaErrorMemoryAllocation (CUDA) / hipErrorOutOfMemory (HIP).
+    pub const ERROR_OUT_OF_MEMORY: i32 = 2;
 }
 
 #[inline]
