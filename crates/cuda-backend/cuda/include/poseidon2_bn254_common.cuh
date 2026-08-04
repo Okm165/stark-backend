@@ -16,6 +16,7 @@ struct Bn254Fr32 {
     uint32_t limbs[8];
 };
 
+
 // ---------------------------------------------------------------------------
 // BN254 Merkle digest: a single Bn254Fr element (32 bytes)
 // Matches Digest = [Bn254Scalar; 1] on the Rust side.
@@ -32,6 +33,7 @@ static_assert(
     BN254_BABY_BEAR_RATE % 4 == 0,
     "BN254_BABY_BEAR_RATE must be a multiple of FpExt degree (4)"
 );
+
 
 // ---------------------------------------------------------------------------
 // Field constants (all in Montgomery form)

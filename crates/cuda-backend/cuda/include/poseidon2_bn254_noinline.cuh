@@ -1,17 +1,12 @@
-/// BN254 field arithmetic and Poseidon2 permutation — __noinline__ boundary layer.
+/// BN254 field arithmetic and Poseidon2 permutation helpers for CUDA.
 ///
-/// Provides field arithmetic (add, sub, mul, sbox, MDS) and Poseidon2 helpers for
-/// the sponge transcript. All functions are __noinline__ to manage register pressure
-/// in row-hash and Merkle kernels where many concurrent threads are more important
-/// than per-invocation speed.
-///
-/// The grinding kernel bypasses this header entirely — it uses its own
-/// `bn254_grind_inline` namespace (in bn254_poseidon2_grind.cu) where the full
-/// permutation is __forceinline__ for zero scratch memory usage.
-///
-/// Uses __uint128_t for 64-bit-limb arithmetic. On NVIDIA, nvcc lowers these to
-/// efficient native PTX. On AMD, hipcc emulates via 32-bit ops (acceptable for
-/// the noinline path where call overhead dominates anyway).
+/// This header provides:
+///   - CIOS Montgomery multiplication matching p3-bn254::helpers::monty_mul
+///   - Field add / sub / neg / double / x^5 S-box
+///   - Templated MDS layers (external and internal, any WIDTH)
+///   - bn254_from_canonical / bn254_to_canonical conversions
+///   - bn254_pack_base_2_31 / u256_mod_u32 helpers for MultiFieldTranscript
+///     packing and sampling during grinding
 #pragma once
 
 #include "poseidon2_bn254_common.cuh"
@@ -46,14 +41,6 @@ static __device__ uint64_t sub256_ret(uint64_t r[4], const uint64_t a[4], const 
 
 // ---------------------------------------------------------------------------
 // Montgomery helpers (matching p3-bn254::helpers exactly)
-//
-// Register pressure strategy:
-//   mul_small         — no __noinline__ (implicitly inlined into bn254_monty_mul)
-//   mul_small_and_acc — __noinline__ (called 3× per monty_mul; noinline reduces
-//                       register pressure across repeated invocations)
-//   imr               — no __noinline__ (inlined into bn254_monty_mul)
-//   bn254_monty_mul   — __noinline__ (the outer boundary; single large function
-//                       with all inner ops except mul_small_and_acc inlined)
 // ---------------------------------------------------------------------------
 
 /// Compute lhs * rhs as a 5-limb product.
