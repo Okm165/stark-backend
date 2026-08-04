@@ -343,9 +343,7 @@ public:
 
     inline void shfl_bfly(uint32_t laneMask)
     {
-        uint32_t idx = (threadIdx.x ^ laneMask) << 2;
-
-        val = __builtin_amdgcn_ds_bpermute(idx, val);
+        val = __shfl_xor_sync(0xFFFFFFFF, val, laneMask);
     }
 
 protected:
