@@ -47,24 +47,29 @@ inline std::pair<dim3, dim3> kernel_launch_2d_params(size_t x, size_t y) {
     return std::make_pair(grid, block);
 }
 
-#define CUDA_OK(expr) do {                                  \
-    cudaError_t err = expr;                                 \
-    if (err != cudaSuccess) {                               \
-        fprintf(stderr, "CUDA kernel error at %s:%d: %s\n", \
-            __FILE__, __LINE__, cudaGetErrorString(err));   \
-    }                                                       \
-} while(0)
+#define CUDA_OK(expr)                                                                              \
+    do {                                                                                           \
+        cudaError_t err = expr;                                                                    \
+        if (err != cudaSuccess) {                                                                  \
+            fprintf(                                                                               \
+                stderr,                                                                            \
+                "CUDA kernel error at %s:%d: %s\n",                                                \
+                __FILE__,                                                                          \
+                __LINE__,                                                                          \
+                cudaGetErrorString(err)                                                            \
+            );                                                                                     \
+        }                                                                                          \
+    } while (0)
 
 #ifdef CUDA_DEBUG
-    inline int cuda_check_kernel(const char* kernel_name) {
-        cudaError_t err = cudaDeviceSynchronize();
-        if (err != cudaSuccess) {
-            fprintf(stderr, "[ERROR] Kernel '%s' failed: %s\n",
-                    kernel_name, cudaGetErrorString(err));
-        }
-        return err;
+inline int cuda_check_kernel(const char *kernel_name) {
+    cudaError_t err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[ERROR] Kernel '%s' failed: %s\n", kernel_name, cudaGetErrorString(err));
     }
-#   define CHECK_KERNEL() cuda_check_kernel(__func__)
+    return err;
+}
+#define CHECK_KERNEL() cuda_check_kernel(__func__)
 #else
-#   define CHECK_KERNEL() cudaGetLastError()
+#define CHECK_KERNEL() cudaGetLastError()
 #endif
