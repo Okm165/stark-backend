@@ -285,9 +285,13 @@ impl DuplexSpongeGpu {
 
         let witness = F::from_u32(witness_u32);
 
-        // 3. Update host state to match (observe the witness + sample)
+        // 3. Validate witness on CPU (catches silent GPU miscompile on AMD)
+        if !self.clone().check_witness(bits, witness) {
+            return Err(GrindError::InvalidWitness);
+        }
+
+        // 4. Update host state to match (observe the witness + sample)
         // This is cheaper than syncing the full state back from device
-        debug_assert!(self.clone().check_witness(bits, witness));
         self.host.observe(witness);
         let _: F = self.host.sample(); // Consume the sample to advance state
 
@@ -307,8 +311,8 @@ pub enum GrindError {
     #[error("Failed to find PoW witness within search space")]
     WitnessNotFound,
 
-    #[error("GPU kernel launch failed (device context creation or H2D copy)")]
-    KernelLaunchFailed,
+    #[error("GPU returned invalid PoW witness (possible kernel miscompile)")]
+    InvalidWitness,
 }
 
 impl FiatShamirTranscript<SC> for DuplexSpongeGpu {

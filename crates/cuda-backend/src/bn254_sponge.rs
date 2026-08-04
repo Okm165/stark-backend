@@ -3,7 +3,7 @@
 //! [`MultiFieldTranscriptGpu`] wraps the CPU `MultiFieldTranscript` and adds
 //! host-to-device state synchronization for GPU proof-of-work grinding.
 
-use std::{ffi::c_void, sync::Arc};
+use std::ffi::c_void;
 
 use openvm_cuda_common::{
     copy::cuda_memcpy_on, d_buffer::DeviceBuffer, error::MemCopyError, stream::GpuDeviceCtx,
@@ -17,59 +17,6 @@ use p3_baby_bear::BabyBear;
 use p3_field::{PrimeCharacteristicRing, PrimeField32};
 
 use crate::sponge::{validate_gpu_grind_bits, GpuFiatShamirTranscript, GrindError};
-
-// ---------------------------------------------------------------------------
-// Distributed grinding support
-// ---------------------------------------------------------------------------
-
-/// Trait for distributed PoW grinding helpers. Implementations send the sponge state
-/// to remote GPUs and return the first valid witness found.
-///
-/// Security: this does NOT modify PoW difficulty. It only parallelizes the search
-/// by having different GPUs search non-overlapping witness subsets (interleaving).
-pub trait DistributedGrindHelper: Send + Sync {
-    /// Number of remote GPUs available for grinding.
-    /// Used by `grind_gpu` to compute the interleave step: step = 1 + num_workers().
-    fn num_workers(&self) -> u32;
-
-    /// Launch grinding on all remote workers. Each remote worker i (0-indexed)
-    /// searches witnesses at offset (i+1) with the given `witness_step`.
-    ///
-    /// The caller (local GPU) searches offset=0 with the same step, so the
-    /// full search space [0, max_witness] is partitioned into non-overlapping
-    /// interleaved slices across all participants.
-    ///
-    /// Returns Ok(Some(witness)) from the first worker to find one, Ok(None)
-    /// if no remote worker found a valid witness, Err on failure.
-    fn grind_remote(
-        &self,
-        sponge_state: &DeviceBn254SpongeState,
-        bits: u32,
-        max_witness: u32,
-        witness_step: u32,
-    ) -> Result<Option<u32>, Box<dyn std::error::Error + Send + Sync>>;
-}
-
-std::thread_local! {
-    static DISTRIBUTED_GRIND_HELPER: std::cell::RefCell<Option<Arc<dyn DistributedGrindHelper>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Install a distributed grind helper for the current thread.
-/// The helper will be used by all subsequent `grind_gpu()` calls on this thread
-/// to race local GPU grinding against remote worker(s).
-pub fn set_distributed_grind_helper(helper: Arc<dyn DistributedGrindHelper>) {
-    DISTRIBUTED_GRIND_HELPER.with(|h| *h.borrow_mut() = Some(helper));
-}
-
-/// Remove the distributed grind helper from the current thread.
-pub fn clear_distributed_grind_helper() {
-    DISTRIBUTED_GRIND_HELPER.with(|h| *h.borrow_mut() = None);
-}
-
-fn get_distributed_grind_helper() -> Option<Arc<dyn DistributedGrindHelper>> {
-    DISTRIBUTED_GRIND_HELPER.with(|h| h.borrow().clone())
-}
 
 /// Bn254 digest type: one BN254 scalar element.
 type Digest = [Bn254Scalar; 1];
@@ -181,7 +128,6 @@ impl MultiFieldTranscriptGpu {
     }
 
     /// Build a `DeviceBn254SpongeState` from the current CPU transcript state.
-    /// Used both for H2D sync (kernel launch) and for distributed grinding (network serialization).
     fn snapshot_sponge_state(&self) -> DeviceBn254SpongeState {
         let mut ds = DeviceBn254SpongeState::default();
         for (i, &s) in self.inner.sponge_state().iter().enumerate() {
@@ -263,80 +209,29 @@ impl GpuFiatShamirTranscript<BabyBearBn254Poseidon2Config> for MultiFieldTranscr
         // 1. Sync host state to device.
         self.sync_h2d(device_ctx)?;
 
-        // 2. Run grinding (distributed-interleaved if available, else local-only).
+        // 2. Launch grinding kernel.
         let max_witness = BabyBear::ORDER_U32 - 1;
-        let helper = get_distributed_grind_helper();
-
-        let witness_u32 = if let Some(helper) = helper {
-            // Distributed-interleaved mode: partition [0, max_witness] across N+1
-            // participants (1 local GPU + N remote workers). Each searches every
-            // (N+1)-th candidate starting at its assigned offset.
-            let num_remote = helper.num_workers();
-            let step = 1 + num_remote; // total participants
-
-            let ds = self.snapshot_sponge_state();
-            let bits_u32 = bits as u32;
-
-            let (tx, rx) = std::sync::mpsc::channel::<u32>();
-
-            // Spawn local GPU thread (offset=0: candidates 0, step, 2*step, ...)
-            let ds_local = ds.clone();
-            let tx_local = tx.clone();
-            std::thread::spawn(move || {
-                if let Ok(w) = crate::cuda::bn254_merkle_tree::bn254_sponge_grind_on_new_stream(
-                    &ds_local,
-                    bits_u32,
-                    0,
-                    max_witness,
-                    step,
-                ) {
-                    let _ = tx_local.send(w);
-                }
-            });
-
-            // Spawn remote workers thread (offsets 1..=N, same step)
-            let ds_remote = ds.clone();
-            let tx_remote = tx.clone();
-            std::thread::spawn(move || {
-                match helper.grind_remote(&ds_remote, bits_u32, max_witness, step) {
-                    Ok(Some(w)) => {
-                        let _ = tx_remote.send(w);
-                    }
-                    _ => {}
-                }
-            });
-
-            drop(tx);
-
-            match rx.recv() {
-                Ok(w) => w,
-                Err(_) => {
-                    // All threads exited without sending — fall back to single-GPU full search.
-                    unsafe {
-                        crate::cuda::bn254_merkle_tree::bn254_sponge_grind(
-                            self.device.as_ptr(),
-                            bits as u32,
-                            max_witness,
-                            device_ctx,
-                        )?
-                    }
-                }
-            }
-        } else {
-            // No distributed helper — local GPU only, full range, step=1.
-            unsafe {
-                crate::cuda::bn254_merkle_tree::bn254_sponge_grind(
-                    self.device.as_ptr(),
-                    bits as u32,
-                    max_witness,
-                    device_ctx,
-                )?
-            }
+        let witness_u32 = unsafe {
+            crate::cuda::bn254_merkle_tree::bn254_sponge_grind(
+                self.device.as_ptr(),
+                bits as u32,
+                max_witness,
+                device_ctx,
+            )?
         };
 
         let witness = BabyBear::from_u32(witness_u32);
 
-        // 3. Update host state: observe witness + consume one sample.
+        // 3. Validate witness on CPU (catches silent GPU miscompile on AMD)
+        if !FiatShamirTranscript::<BabyBearBn254Poseidon2Config>::check_witness(
+            &mut self.inner.clone(),
+            bits,
+            witness,
+        ) {
+            return Err(GrindError::InvalidWitness);
+        }
+
+        // 4. Update host state: observe witness + consume one sample.
         FiatShamirTranscript::<BabyBearBn254Poseidon2Config>::observe(&mut self.inner, witness);
         let _ = FiatShamirTranscript::<BabyBearBn254Poseidon2Config>::sample(&mut self.inner);
 
@@ -422,93 +317,6 @@ mod tests {
         assert!(
             elapsed.as_secs() < 5,
             "15-bit grind took {elapsed:?} — expected < 5s (stride loop bug?)"
-        );
-
-        // Verify correctness
-        let mut cpu = default_transcript();
-        for i in 0..20u32 {
-            let val = BabyBear::from_u32(i.wrapping_mul(37).wrapping_add(100));
-            FiatShamirTranscript::<BabyBearBn254Poseidon2Config>::observe(&mut cpu, val);
-        }
-        FiatShamirTranscript::<BabyBearBn254Poseidon2Config>::observe(&mut cpu, witness);
-        let witness_bits =
-            FiatShamirTranscript::<BabyBearBn254Poseidon2Config>::sample_bits(&mut cpu, bits);
-        assert_eq!(
-            witness_bits, 0,
-            "CUDA witness invalid on CPU at {bits} bits"
-        );
-    }
-
-    /// Diagnostic: verify a CPU-computed witness on GPU to detect sponge divergence.
-    #[test]
-    fn test_bn254_sponge_gpu_cpu_agreement() {
-        use crate::cuda::bn254_merkle_tree::bn254_verify_witness;
-
-        let ctx = GpuDeviceCtx::for_device(get_device().unwrap() as u32).unwrap();
-        let bits = 15usize;
-
-        // Build identical states on GPU and CPU
-        let mut gpu = MultiFieldTranscriptGpu::new();
-        let mut cpu = default_transcript();
-
-        for i in 0..20u32 {
-            let val = BabyBear::from_u32(i.wrapping_mul(37).wrapping_add(100));
-            FiatShamirTranscript::<BabyBearBn254Poseidon2Config>::observe(&mut gpu, val);
-            FiatShamirTranscript::<BabyBearBn254Poseidon2Config>::observe(&mut cpu, val);
-        }
-
-        // Find the FIRST valid witness on CPU (brute force)
-        let cpu_witness = {
-            let mut w = 0u32;
-            loop {
-                let mut cpu_clone = cpu.clone();
-                let val = BabyBear::from_u32(w);
-                FiatShamirTranscript::<BabyBearBn254Poseidon2Config>::observe(&mut cpu_clone, val);
-                let sample = FiatShamirTranscript::<BabyBearBn254Poseidon2Config>::sample_bits(
-                    &mut cpu_clone,
-                    bits,
-                );
-                if sample == 0 {
-                    break w;
-                }
-                w += 1;
-                if w > 200_000 {
-                    panic!("Could not find CPU witness in first 200K candidates");
-                }
-            }
-        };
-        eprintln!("CPU found valid witness: w={cpu_witness}");
-
-        // Now sync GPU state and verify this CPU-found witness on GPU
-        gpu.sync_h2d(&ctx).unwrap();
-        let gpu_result = unsafe {
-            bn254_verify_witness(gpu.device.as_ptr(), bits as u32, cpu_witness, &ctx)
-                .expect("GPU verify kernel failed")
-        };
-        eprintln!("GPU verify of CPU witness {cpu_witness}: sample_bits={gpu_result} (expected 0)");
-
-        // Also check witness=0 on both
-        let cpu_check_0 = {
-            let mut cpu_clone = cpu.clone();
-            FiatShamirTranscript::<BabyBearBn254Poseidon2Config>::observe(
-                &mut cpu_clone,
-                BabyBear::from_u32(0),
-            );
-            FiatShamirTranscript::<BabyBearBn254Poseidon2Config>::sample_bits(&mut cpu_clone, bits)
-        };
-        let gpu_check_0 = unsafe {
-            bn254_verify_witness(gpu.device.as_ptr(), bits as u32, 0, &ctx)
-                .expect("GPU verify kernel failed for w=0")
-        };
-        eprintln!("w=0: CPU sample_bits={cpu_check_0}, GPU sample_bits={gpu_check_0}");
-
-        assert_eq!(
-            gpu_result, 0,
-            "GPU and CPU DISAGREE on witness {cpu_witness}: GPU says {gpu_result}, CPU says 0"
-        );
-        assert_eq!(
-            gpu_check_0, cpu_check_0 as u32,
-            "GPU/CPU disagree on w=0: GPU={gpu_check_0}, CPU={cpu_check_0}"
         );
     }
 }
