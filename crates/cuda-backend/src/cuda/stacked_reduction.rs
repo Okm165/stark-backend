@@ -218,7 +218,7 @@ pub unsafe fn initialize_k_rot_from_eq_segments(
 /// - `unstacked_cols` pointers must be within bounds of `q_evals`.
 /// - `output` must have length at least `S_DEG * D_EF = 8` and be zero-initialized.
 #[allow(clippy::too_many_arguments)]
-pub unsafe fn stacked_reduction_sumcheck_mle_round(
+pub(crate) unsafe fn stacked_reduction_sumcheck_mle_round(
     q_evals: &DeviceBuffer<*const EF>,
     eq_r_ns: &EqEvalSegments<EF>,
     k_rot_ns: &EqEvalSegments<EF>,
@@ -254,7 +254,7 @@ pub unsafe fn stacked_reduction_sumcheck_mle_round(
 /// # Safety
 /// - `output` must have length at least `S_DEG * D_EF = 8` and be zero-initialized.
 #[allow(clippy::too_many_arguments)]
-pub unsafe fn stacked_reduction_sumcheck_mle_round_degenerate(
+pub(crate) unsafe fn stacked_reduction_sumcheck_mle_round_degenerate(
     q_evals: &DeviceBuffer<*const EF>,
     eq_ub_ptr: *const EF,
     eq_r: EF,
