@@ -88,22 +88,11 @@ where
     assert_eq!(m, u.len());
     debug_assert!(m >= l_skip);
 
-    let whir_setup_start = std::time::Instant::now();
-    // Explicit sync to measure pending async work vs actual grind time
-    device_ctx.stream.synchronize().unwrap();
-    let sync_ms = whir_setup_start.elapsed().as_millis();
     // Proof-of-work grinding before μ batching challenge.
     // This amplifies soundness of the initial batching step.
-    let grind_only_start = std::time::Instant::now();
     let mu_pow_witness = transcript
         .grind_gpu(whir_params.mu_pow_bits, device_ctx)
         .map_err(WhirProverError::MuGrind)?;
-    let mu_grind_ms = grind_only_start.elapsed().as_millis();
-    tracing::info!(
-        sync_pending_ms = sync_ms as u64,
-        mu_grind_ms = mu_grind_ms as u64,
-        "WHIR: pre-grind sync vs actual grind timing"
-    );
     // Sample randomness for algebraic batching.
     // We batch the codewords for \hat{q}_j together _before_ applying WHIR.
     let mu = transcript.sample_ext();
@@ -219,24 +208,11 @@ where
     let mut d_s_evals = DeviceBuffer::<EF>::with_capacity_on(2, device_ctx);
     let mut d_sumcheck_tmp = DeviceBuffer::<EF>::new();
 
-    tracing::info!(
-        mu_grind_ms = mu_grind_ms as u64,
-        setup_total_ms = whir_setup_start.elapsed().as_millis() as u64,
-        m,
-        num_commits,
-        "WHIR setup phase complete (before rounds)"
-    );
     mem.tracing_info("before_whir_rounds");
     // We will drop `stacked_per_commit` and hence `common_main_pcs_data` after whir round 0.
     for (whir_round, round_params) in whir_params.rounds.iter().enumerate() {
-        let _whir_round_span = tracing::info_span!("whir_round", round = whir_round).entered();
         let is_last_round = whir_round == num_whir_rounds - 1;
-        let round_start = std::time::Instant::now();
         // Run k_whir rounds of sumcheck on `sum_{x in H_m} \hat{w}(\hat{f}(x), x)`
-        let _sumcheck_span = tracing::info_span!("whir_sumcheck", rounds = k_whir).entered();
-        let mut sumcheck_kernel_ms = 0u128;
-        let mut grind_ms = 0u128;
-        let mut fold_ms = 0u128;
         for round in 0..k_whir {
             // Do not use f_coeffs.len() because it might have extra capacity.
             let f_height = 1 << (m - round);
@@ -256,7 +232,6 @@ where
             }
             let mut new_f_coeffs = DeviceBuffer::<EF>::with_capacity_on(output_height, device_ctx);
             let mut new_w_moments = DeviceBuffer::<EF>::with_capacity_on(output_height, device_ctx);
-            let t0 = std::time::Instant::now();
             // SAFETY:
             // - `d_s_evals` has length 2
             // - `d_sumcheck_tmp` has at least required scratch length
@@ -276,22 +251,18 @@ where
                 })?;
             }
             let s_evals = d_s_evals.to_host_on(device_ctx)?;
-            sumcheck_kernel_ms += t0.elapsed().as_millis();
             for &eval in &s_evals {
                 transcript.observe_ext(eval);
             }
             whir_sumcheck_polys.push(s_evals.try_into().unwrap());
 
-            let t1 = std::time::Instant::now();
             folding_pow_witnesses.push(
                 transcript
                     .grind_gpu(whir_params.folding_pow_bits, device_ctx)
                     .map_err(WhirProverError::FoldingGrind)?,
             );
-            grind_ms += t1.elapsed().as_millis();
             let alpha = transcript.sample_ext();
 
-            let t2 = std::time::Instant::now();
             // Fold `f` and `w` in coefficient/moment form with respect to `alpha`.
             // SAFETY:
             // - input buffers have length `f_height`.
@@ -312,29 +283,15 @@ where
                     round,
                 })?;
             }
-            fold_ms += t2.elapsed().as_millis();
             f_coeffs = new_f_coeffs;
             w_moments = new_w_moments;
         }
-        tracing::info!(
-            whir_round,
-            sumcheck_ms = sumcheck_kernel_ms,
-            grind_ms = grind_ms,
-            fold_ms = fold_ms,
-            total_sumcheck_ms = round_start.elapsed().as_millis() as u64,
-            "WHIR sumcheck phase timing"
-        );
-        drop(_sumcheck_span);
         // Define g^ = f^(alpha, \cdot) and send matrix commit of RS(g^)
         // `f_coeffs` is the coefficient form of f^(alpha, \cdot).
         let f_height = 1 << (m - k_whir);
         debug_assert!(f_coeffs.len() >= f_height);
         debug_assert_eq!(size_of::<EF>() / size_of::<F>(), D_EF);
         let mut g_coeffs = DeviceBuffer::<F>::with_capacity_on(f_height * D_EF, device_ctx);
-        let ntt_start = std::time::Instant::now();
-        let _rs_ntt_span =
-            tracing::info_span!("whir_rs_ntt", f_height, log_rs_domain = log_rs_domain_size)
-                .entered();
         // SAFETY: we allocated `f_coeffs.len() * D_EF` space for `g_coeffs` to do a 1-to-D_EF
         // (1-to-4) split
         unsafe {
@@ -377,16 +334,6 @@ where
                     device_ctx,
                 );
             }
-            let ntt_ms = ntt_start.elapsed().as_millis();
-            drop(_rs_ntt_span);
-
-            let merkle_start = std::time::Instant::now();
-            let _merkle_span = tracing::info_span!(
-                "whir_merkle_tree",
-                codeword_height,
-                leaves = codeword_height >> k_whir
-            )
-            .entered();
             let g_tree = MerkleTreeGpu::<F, HS::Digest>::new_with_hash::<HS::MerkleHash>(
                 DeviceMatrix::new(Arc::new(g_rs), codeword_height, D_EF),
                 1 << k_whir,
@@ -394,14 +341,6 @@ where
                 device_ctx,
             )
             .map_err(WhirProverError::MerkleTree)?;
-            let merkle_ms = merkle_start.elapsed().as_millis();
-            drop(_merkle_span);
-            tracing::info!(
-                whir_round,
-                ntt_ms = ntt_ms as u64,
-                merkle_ms = merkle_ms as u64,
-                "WHIR NTT+Merkle timing"
-            );
             let g_commit = g_tree.root();
             transcript.observe_commit(g_commit);
             codeword_commits.push(g_commit);
@@ -431,17 +370,9 @@ where
                 coeffs.push(coeff);
             }
             final_poly = Some(coeffs);
-            drop(_rs_ntt_span);
             (None, None)
         };
 
-        let query_start = std::time::Instant::now();
-        let _query_span = tracing::info_span!(
-            "whir_query_phase",
-            num_queries = round_params.num_queries,
-            round = whir_round
-        )
-        .entered();
         // omega is generator of RS domain `\mathcal{L}^{(2^k)}`
         let omega = F::two_adic_generator(log_rs_domain_size - k_whir);
         let num_queries = round_params.num_queries;
@@ -559,14 +490,6 @@ where
                 .collect();
         }
         rs_tree = g_tree;
-        let query_ms = query_start.elapsed().as_millis();
-        drop(_query_span);
-        tracing::info!(
-            whir_round,
-            query_ms = query_ms as u64,
-            round_total_ms = round_start.elapsed().as_millis() as u64,
-            "WHIR round complete"
-        );
 
         // We still sample on the last round to match the verifier, who uses a
         // final gamma to unify some logic. But we do not need to update
@@ -617,7 +540,6 @@ where
 
         m -= k_whir;
         log_rs_domain_size -= 1;
-        drop(_whir_round_span);
     }
 
     mem.emit_metrics();
