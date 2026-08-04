@@ -222,8 +222,8 @@ struct Fp3x2 {
     static constexpr uint32_t W = 11;  // v² = 11
     
     __device__ Fp3x2() : c0(), c1() {}
-    __device__ Fp3x2(Fp a) : c0(a), c1() {}
-    __device__ Fp3x2(Fp3 a0) : c0(a0), c1() {}
+    __device__ explicit Fp3x2(Fp a) : c0(a), c1() {}
+    __device__ explicit Fp3x2(Fp3 a0) : c0(a0), c1() {}
     __device__ Fp3x2(Fp3 a0, Fp3 a1) : c0(a0), c1(a1) {}
     __device__ explicit Fp3x2(uint32_t x) : c0(Fp(x)), c1() {}
     

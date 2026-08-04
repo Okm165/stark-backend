@@ -169,8 +169,8 @@ struct Kb2x3 {
     }
     
     __device__ Kb2x3() : c0(), c1(), c2() {}
-    __device__ Kb2x3(Kb a) : c0(a), c1(), c2() {}
-    __device__ Kb2x3(Kb2 a0) : c0(a0), c1(), c2() {}
+    __device__ explicit Kb2x3(Kb a) : c0(a), c1(), c2() {}
+    __device__ explicit Kb2x3(Kb2 a0) : c0(a0), c1(), c2() {}
     __device__ Kb2x3(Kb2 a0, Kb2 a1, Kb2 a2) : c0(a0), c1(a1), c2(a2) {}
     __device__ explicit Kb2x3(uint32_t x) : c0(Kb(x)), c1(), c2() {}
     
