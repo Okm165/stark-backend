@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, env, path::Path, process::Command, sync::OnceLock};
+use std::{collections::BTreeSet, env, fs, path::Path, process::Command, sync::OnceLock};
 
 /// GPU vendor detected at build time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +82,12 @@ pub fn emit_gpu_vendor_cfg() {
 pub struct CudaBuilder {
     include_paths: Vec<String>,
     source_files: Vec<String>,
+    /// Device-link isolation groups for AMD/HIP.
+    /// Files matching a group suffix are compiled with `-fgpu-rdc` and device-linked
+    /// only with other files in the same group. Files not in any group are placed
+    /// in the default group. This isolates code generation across groups, preventing
+    /// changes in one group from affecting register allocation in another.
+    device_link_groups: Vec<(String, Vec<String>)>,
     watch_paths: Vec<String>,
     watch_globs: Vec<String>,
     library_name: String,
@@ -128,6 +134,7 @@ impl Default for CudaBuilder {
         Self {
             include_paths: Vec::new(),
             source_files: Vec::new(),
+            device_link_groups: Vec::new(),
             watch_paths: vec!["build.rs".to_string()],
             watch_globs: Vec::new(),
             library_name: String::new(),
@@ -189,6 +196,22 @@ impl CudaBuilder {
                 self.source_files.push(path.to_string_lossy().to_string());
             }
         }
+        self
+    }
+
+    /// Assign source files to an isolated device-link group (AMD only).
+    ///
+    /// All files matching `suffix` will be compiled with `-fgpu-rdc` and
+    /// device-linked together in their own group, separate from the default
+    /// group. This prevents interprocedural optimization in one group from
+    /// affecting code generation in another.
+    ///
+    /// On NVIDIA this is a no-op (nvcc handles RDC differently).
+    pub fn device_link_group(mut self, group_name: &str, suffixes: &[&str]) -> Self {
+        self.device_link_groups.push((
+            group_name.to_string(),
+            suffixes.iter().map(|s| s.to_string()).collect(),
+        ));
         self
     }
 
@@ -307,6 +330,7 @@ impl CudaBuilder {
         } else {
             builder
                 .debug(false)
+                .flag(format!("-O{opt_level}"))
                 .flag(format!("--ptxas-options=-O{opt_level}"));
         }
         if self.get_lineinfo() {
@@ -341,46 +365,44 @@ impl CudaBuilder {
         let archs = self.get_gpu_arch();
         let opt_level = self.get_opt_level();
 
-        let compat_dir = cuda_builder_include_dir();
-        let stubs_dir = format!("{compat_dir}/hip-stubs");
-        let cuda2hip = format!("{compat_dir}/cuda2hip.hpp");
-
         let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
+        let stubs_dir = generate_hip_stubs(&out_dir);
+        let cuda2hip = format!("{}/cuda2hip.hpp", cuda_builder_include_dir());
 
-        let mut common_flags: Vec<String> = Vec::new();
-        common_flags.push("-fgpu-rdc".to_string());
-        common_flags.push("-x".to_string());
-        common_flags.push("hip".to_string());
-        common_flags.push("-include".to_string());
-        common_flags.push(cuda2hip.clone());
-        common_flags.push(format!("-I{stubs_dir}"));
+        let mut base_flags: Vec<String> = Vec::new();
+        base_flags.push("-fgpu-rdc".to_string());
+        base_flags.push("-x".to_string());
+        base_flags.push("hip".to_string());
+        base_flags.push("-include".to_string());
+        base_flags.push(cuda2hip.clone());
+        base_flags.push(format!("-I{stubs_dir}"));
 
         for arch in &archs {
-            common_flags.push(format!("--offload-arch={arch}"));
+            base_flags.push(format!("--offload-arch={arch}"));
         }
         for flag in &self.custom_flags {
             if !is_nvcc_only_flag(flag) {
-                common_flags.push(flag.clone());
+                base_flags.push(flag.clone());
             }
         }
         for inc in &self.include_paths {
-            common_flags.push(format!("-I{inc}"));
+            base_flags.push(format!("-I{inc}"));
         }
-        common_flags.push(format!("-O{opt_level}"));
+        base_flags.push(format!("-O{opt_level}"));
 
-        // gfx1100 (RDNA3): LLVM's AMDGPU backend can emit >63 outstanding
-        // loads without s_waitcnt, overflowing the 6-bit VMCNT counter and
-        // causing stale reads (LLVM #172932).  +precise-memory forces a
-        // s_waitcnt after every memory operation, preventing this.
-        // Disable with AMDGPU_PRECISE_MEMORY=0.
-        if env::var("AMDGPU_PRECISE_MEMORY").as_deref() != Ok("0") {
-            common_flags.push("-Xarch_device".to_string());
-            common_flags.push("-mattr=+precise-memory".to_string());
+        if env::var("AMDGPU_PRECISE_MEMORY").as_deref() == Ok("1") {
+            base_flags.push("-Xarch_device".to_string());
+            base_flags.push("-mattr=+precise-memory".to_string());
         }
 
-        // Phase 1: compile each .cu file to a relocatable .o
+        // Phase 1: compile each .cu file with -fgpu-rdc.
         let hipcc = hipcc_path();
-        let mut obj_files = Vec::new();
+        let mut group_objs: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        group_objs.insert("default".to_string(), Vec::new());
+        for (name, _) in &self.device_link_groups {
+            group_objs.insert(name.clone(), Vec::new());
+        }
         let mut seen_sources: BTreeSet<String> = BTreeSet::new();
 
         for (idx, src) in self.source_files.iter().enumerate() {
@@ -394,7 +416,7 @@ impl CudaBuilder {
             let obj_path = format!("{out_dir}/hip_{idx}_{stem}.o");
 
             let mut cmd = Command::new(hipcc);
-            cmd.args(&common_flags)
+            cmd.args(&base_flags)
                 .arg("-fPIC")
                 .arg("-c")
                 .arg(src)
@@ -407,17 +429,29 @@ impl CudaBuilder {
             if !status.success() {
                 panic!("hipcc failed to compile {src} (exit: {status})");
             }
-            obj_files.push(obj_path);
+
+            let group = self
+                .get_device_link_group(src)
+                .unwrap_or("default")
+                .to_string();
+            group_objs.get_mut(&group).unwrap().push(obj_path);
         }
 
         let lib_path = format!("{out_dir}/lib{}.a", self.library_name);
         let _ = std::fs::remove_file(&lib_path);
 
-        // Phase 2: device-link all .o files into a single partially-linked
-        // object.  `--hip-link -r` merges device code from all TUs and
-        // resolves cross-TU __constant__ references.
-        let device_linked = format!("{out_dir}/device_linked_{}.o", self.library_name);
-        {
+        // Phase 2: device-link each group separately.
+        // Each group produces its own partially-linked object, isolating
+        // interprocedural optimization decisions between groups.
+        let mut linked_objs = Vec::new();
+        for (group_name, objs) in &group_objs {
+            if objs.is_empty() {
+                continue;
+            }
+            let device_linked = format!(
+                "{out_dir}/device_linked_{}_{}.o",
+                self.library_name, group_name
+            );
             let mut cmd = Command::new(hipcc);
             cmd.arg("-fgpu-rdc")
                 .arg("--hip-link")
@@ -427,24 +461,28 @@ impl CudaBuilder {
             for arch in &archs {
                 cmd.arg(format!("--offload-arch={arch}"));
             }
-            if env::var("AMDGPU_PRECISE_MEMORY").as_deref() != Ok("0") {
+            if env::var("AMDGPU_PRECISE_MEMORY").as_deref() == Ok("1") {
                 cmd.arg("-Xarch_device").arg("-mattr=+precise-memory");
             }
-            cmd.args(&obj_files).arg("-o").arg(&device_linked);
+            cmd.args(objs).arg("-o").arg(&device_linked);
 
             let status = cmd
                 .status()
-                .unwrap_or_else(|e| panic!("hipcc device-link failed: {e}"));
+                .unwrap_or_else(|e| panic!("hipcc device-link ({group_name}) failed: {e}"));
             if !status.success() {
-                panic!("hipcc device-link failed (exit: {status})");
+                panic!("hipcc device-link ({group_name}) failed (exit: {status})");
             }
+            linked_objs.push(device_linked);
         }
 
         println!("cargo:rustc-link-arg=-Wl,--allow-multiple-definition");
 
-        // Phase 3: archive the device-linked object.
+        // Phase 3: archive all device-linked group objects.
         let mut cmd = Command::new("ar");
-        cmd.arg("rcs").arg(&lib_path).arg(&device_linked);
+        cmd.arg("rcs").arg(&lib_path);
+        for obj in &linked_objs {
+            cmd.arg(obj);
+        }
         let status = cmd.status().unwrap_or_else(|e| panic!("ar failed: {e}"));
         if !status.success() {
             panic!("ar failed (exit: {status})");
@@ -455,6 +493,15 @@ impl CudaBuilder {
     }
 
     // ── Shared helpers ──────────────────────────────────────────────
+
+    fn get_device_link_group(&self, source_path: &str) -> Option<&str> {
+        for (name, suffixes) in &self.device_link_groups {
+            if suffixes.iter().any(|s| source_path.ends_with(s.as_str())) {
+                return Some(name.as_str());
+            }
+        }
+        None
+    }
 
     fn validate(&self) {
         if self.library_name.is_empty() {
@@ -479,6 +526,7 @@ impl CudaBuilder {
 
     fn setup_rerun_conditions(&self) {
         for var in [
+            "GPU_ARCH",
             "CUDA_ARCH",
             "CUDA_OPT_LEVEL",
             "CUDA_DEBUG",
@@ -505,7 +553,8 @@ impl CudaBuilder {
         if !self.gpu_arch.is_empty() {
             return self.gpu_arch.clone();
         }
-        if let Ok(env_archs) = env::var("CUDA_ARCH") {
+        // GPU_ARCH is the canonical env var; CUDA_ARCH kept for backward compat
+        if let Ok(env_archs) = env::var("GPU_ARCH").or_else(|_| env::var("CUDA_ARCH")) {
             let archs: Vec<String> = env_archs
                 .split(',')
                 .map(|s| s.trim().to_string())
@@ -526,14 +575,13 @@ impl CudaBuilder {
             .clone()
             .or_else(|| env::var("CUDA_OPT_LEVEL").ok())
             .unwrap_or_else(|| {
-                // AMD gfx1100 (RDNA3): -O3 triggers LLVM miscompilations in
-                // large shared-memory reductions, producing incorrect sumcheck
-                // polynomials.  -O2 is equally fast and avoids the bug.
-                if self.vendor == GpuVendor::Amd {
-                    "2".to_string()
-                } else {
-                    "3".to_string()
-                }
+                // AMD gfx1100 (RDNA3): -O3 previously triggered LDS reload
+                // miscompilations (LLVM #207883) in shared-memory reductions.
+                // cuda2hip.hpp Step 6 inserts compiler fences after every
+                // __syncthreads(), preventing the sinking optimization that
+                // causes the bug.  Safe to use -O3 with the fences in place.
+                // Override with CUDA_OPT_LEVEL=2 if issues resurface.
+                "3".to_string()
             })
     }
 
@@ -581,7 +629,9 @@ pub fn detect_nvidia_arch() -> String {
         .trim()
         .replace('.', "");
 
+    println!("cargo:rustc-env=GPU_ARCH={arch}");
     println!("cargo:rustc-env=CUDA_ARCH={arch}");
+    env::set_var("GPU_ARCH", &arch);
     env::set_var("CUDA_ARCH", &arch);
     arch
 }
@@ -589,9 +639,10 @@ pub fn detect_nvidia_arch() -> String {
 /// Detect AMD GPU architecture via `rocminfo`.
 ///
 /// Parses the first `gfx*` ISA name from `rocminfo` output (e.g. `gfx1100`).
-/// The `HIP_ARCH` environment variable can override auto-detection.
+/// The `HIP_ARCH` or `GPU_ARCH` environment variables can override auto-detection.
 pub fn detect_amd_arch() -> String {
-    if let Ok(arch) = env::var("HIP_ARCH") {
+    if let Ok(arch) = env::var("HIP_ARCH").or_else(|_| env::var("GPU_ARCH")) {
+        println!("cargo:rustc-env=GPU_ARCH={arch}");
         println!("cargo:rustc-env=CUDA_ARCH={arch}");
         return arch;
     }
@@ -607,6 +658,7 @@ pub fn detect_amd_arch() -> String {
         if let Some(name) = trimmed.strip_prefix("Name:") {
             let name = name.trim();
             if name.starts_with("gfx") {
+                println!("cargo:rustc-env=GPU_ARCH={name}");
                 println!("cargo:rustc-env=CUDA_ARCH={name}");
                 return name.to_string();
             }
@@ -635,9 +687,55 @@ pub fn nvcc_parallel_jobs() -> String {
 }
 
 /// Path to this crate's `include/` directory, embedded at compile time.
-/// Contains `cuda2hip.hpp` and the `hip-stubs/` folder.
+/// Contains `cuda2hip.hpp`.
 fn cuda_builder_include_dir() -> &'static str {
     env!("CUDA_BUILDER_INCLUDE_DIR")
+}
+
+/// Generate empty/redirect stub headers in `OUT_DIR` so that CUDA `#include`
+/// directives resolve when compiling with hipcc (where the CUDA SDK is absent).
+///
+/// Empty stubs satisfy includes already covered by `cuda2hip.hpp` (which
+/// force-includes `hip/hip_runtime.h`).  CUB stubs redirect to hipCUB.
+fn generate_hip_stubs(out_dir: &str) -> String {
+    let dir = format!("{out_dir}/hip-stubs");
+    fs::create_dir_all(format!("{dir}/cub/device")).expect("failed to create hip-stubs dir");
+
+    let empty: &[&str] = &[
+        "cuda.h",
+        "cuda_runtime.h",
+        "cuda_runtime_api.h",
+        "cooperative_groups.h",
+        "vector_types.h",
+        "driver_types.h",
+        "device_atomic_functions.h",
+    ];
+    for name in empty {
+        fs::write(format!("{dir}/{name}"), "/* generated hip stub */\n")
+            .unwrap_or_else(|e| panic!("failed to write stub {name}: {e}"));
+    }
+
+    let redirects: &[(&str, &str)] = &[
+        ("cub/cub.cuh", "#include <hipcub/hipcub.hpp>\n"),
+        (
+            "cub/device/device_reduce.cuh",
+            "#include <hipcub/device/device_reduce.hpp>\n",
+        ),
+        (
+            "cub/device/device_merge_sort.cuh",
+            "#include <hipcub/device/device_merge_sort.hpp>\n",
+        ),
+        (
+            "cub/device/device_scan.cuh",
+            "#include <hipcub/device/device_scan.hpp>\n",
+        ),
+    ];
+    for (name, content) in redirects {
+        fs::write(format!("{dir}/{name}"), content)
+            .unwrap_or_else(|e| panic!("failed to write stub {name}: {e}"));
+    }
+
+    dir
 }
 
 /// Resolve the path to `hipcc`.
