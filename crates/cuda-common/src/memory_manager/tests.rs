@@ -1,6 +1,7 @@
 //! Tests for memory_manager - focused on edge cases and dangerous scenarios
 
 use super::{
+    cuda::gpu_mem_info,
     d_free, d_malloc_on,
     vm_pool::{VirtualMemoryPool, VpmmConfig},
 };
@@ -10,18 +11,8 @@ use crate::{
     stream::{GpuDeviceCtx, StreamGuard},
 };
 
-#[cfg_attr(not(gpu_vendor_amd), link(name = "cudart"))]
-#[cfg_attr(gpu_vendor_amd, link(name = "amdhip64"))]
-extern "C" {
-    #[cfg_attr(gpu_vendor_amd, link_name = "hipMemGetInfo")]
-    fn cudaMemGetInfo(free_bytes: *mut usize, total_bytes: *mut usize) -> i32;
-}
-
 fn get_gpu_free_memory() -> usize {
-    let mut free = 0usize;
-    let mut total = 0usize;
-    let err = unsafe { cudaMemGetInfo(&mut free, &mut total) };
-    assert_eq!(err, 0, "cudaMemGetInfo failed: {}", err);
+    let (free, _) = gpu_mem_info();
     free
 }
 

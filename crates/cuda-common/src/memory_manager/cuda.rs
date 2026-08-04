@@ -5,6 +5,11 @@ pub(super) type CUdeviceptr = u64;
 #[allow(non_camel_case_types)]
 pub(super) type CUmemGenericAllocationHandle = u64;
 
+crate::gpu_link! {
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipMemGetInfo")]
+    fn cudaMemGetInfo(free: *mut usize, total: *mut usize) -> i32;
+}
+
 extern "C" {
     fn _vpmm_check_support(device_ordinal: i32) -> i32;
     fn _vpmm_min_granularity(device_ordinal: i32, out: *mut usize) -> i32;
@@ -19,6 +24,14 @@ extern "C" {
     fn _vpmm_set_access(va: CUdeviceptr, bytes: usize, device_ordinal: i32) -> i32;
     fn _vpmm_unmap(va: CUdeviceptr, bytes: usize) -> i32;
     fn _vpmm_release(h: CUmemGenericAllocationHandle) -> i32;
+}
+
+/// Returns (free_bytes, total_bytes) of GPU device memory.
+pub(super) fn gpu_mem_info() -> (usize, usize) {
+    let mut free = 0usize;
+    let mut total = 0usize;
+    unsafe { cudaMemGetInfo(&mut free, &mut total) };
+    (free, total)
 }
 
 pub(super) unsafe fn vpmm_check_support(device_ordinal: i32) -> Result<(), CudaError> {
