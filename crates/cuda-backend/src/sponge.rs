@@ -306,6 +306,9 @@ pub enum GrindError {
 
     #[error("Failed to find PoW witness within search space")]
     WitnessNotFound,
+
+    #[error("GPU kernel launch failed (device context creation or H2D copy)")]
+    KernelLaunchFailed,
 }
 
 impl FiatShamirTranscript<SC> for DuplexSpongeGpu {

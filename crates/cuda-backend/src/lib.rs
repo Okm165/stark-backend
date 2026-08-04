@@ -20,7 +20,7 @@ pub mod utils;
 pub mod whir;
 
 /// Rust bindings for CUDA kernels
-mod cuda;
+pub mod cuda;
 mod device;
 mod engine;
 mod error;
@@ -29,7 +29,10 @@ mod pkey;
 mod sumcheck;
 mod types;
 #[cfg(feature = "baby-bear-bn254-poseidon2")]
-pub use bn254_sponge::MultiFieldTranscriptGpu;
+pub use bn254_sponge::{
+    clear_distributed_grind_helper, set_distributed_grind_helper, DeviceBn254SpongeState,
+    DistributedGrindHelper, MultiFieldTranscriptGpu,
+};
 pub use device::*;
 pub use engine::*;
 pub use error::*;
