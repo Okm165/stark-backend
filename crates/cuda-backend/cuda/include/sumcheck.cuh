@@ -41,8 +41,7 @@ __device__ __forceinline__ FpExt warp_reduce_sum_n(FpExt val, uint32_t n) {
         FpExt other;
 #pragma unroll
         for (int i = 0; i < 4; i++) {
-            other.elems[i] =
-                Fp::fromRaw(__shfl_xor_sync(0xffffffff, val.elems[i].asRaw(), offset));
+            other.elems[i] = Fp::fromRaw(__shfl_xor_sync(0xffffffff, val.elems[i].asRaw(), offset));
         }
         val = val + other;
     }
@@ -259,9 +258,9 @@ static __global__ void final_reduce_block_sums(
 // Grid: (num_segments, d) where each block (seg, x) reduces blocks for segment `seg` at output index `x`.
 // segment_offsets[seg] gives the start block index; segment_offsets[seg+1] gives the end.
 static __global__ void batched_final_reduce_block_sums(
-    const FpExt *block_sums,           // [total_blocks][d]
-    FpExt *output,                     // [num_segments][d]
-    const uint32_t *segment_offsets,   // [num_segments + 1], device memory
+    const FpExt *block_sums,         // [total_blocks][d]
+    FpExt *output,                   // [num_segments][d]
+    const uint32_t *segment_offsets, // [num_segments + 1], device memory
     uint32_t d
 ) {
     extern __shared__ char smem[];

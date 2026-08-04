@@ -36,8 +36,7 @@ __device__ __forceinline__ Fp get_twiddle(uint32_t level, uint32_t index) {
 }
 
 __device__ __forceinline__ uint32_t linear_thread_lane() {
-    uint32_t linear_tid =
-        threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z);
+    uint32_t linear_tid = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z);
     return linear_tid & ((1u << LOG_WARP_SIZE) - 1u);
 }
 
@@ -79,7 +78,7 @@ template <bool intt> __device__ __forceinline__ Fp sum_or_semi_sum(Fp &&x) {
 template <bool intt, bool needs_shmem>
 __device__ __forceinline__ void ntt_natural_to_bitrev(
     Fp &this_thread_value,
-    Fp *sbuf, // shared memory buffer for this thread's NTT (size 1 << l_skip)
+    Fp *sbuf,              // shared memory buffer for this thread's NTT (size 1 << l_skip)
     uint32_t const i,      // thread index within NTT [0, 1 << l_skip)
     uint32_t const l_skip, // log2 of NTT size
     bool const active_thread = true

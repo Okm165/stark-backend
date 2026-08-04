@@ -16,7 +16,6 @@ struct Bn254Fr32 {
     uint32_t limbs[8];
 };
 
-
 // ---------------------------------------------------------------------------
 // BN254 Merkle digest: a single Bn254Fr element (32 bytes)
 // Matches Digest = [Bn254Scalar; 1] on the Rust side.
@@ -34,7 +33,6 @@ static_assert(
     "BN254_BABY_BEAR_RATE must be a multiple of FpExt degree (4)"
 );
 
-
 // ---------------------------------------------------------------------------
 // Field constants (all in Montgomery form)
 // ---------------------------------------------------------------------------
@@ -51,14 +49,14 @@ __device__ __constant__ static const uint64_t BN254_P[4] = {
 // value as BN254_P (in poseidon2_bn254_common.cuh) — just split into 32-bit
 // halves: each adjacent pair (lo, hi) is one u64 limb of BN254_P.
 __device__ __constant__ static const uint32_t BN254_P_32[8] = {
-    4026531841u, 
-    1138881939u, 
-    2042196113u, 
-    674490440u,  
-    2172737629u, 
-    3092268470u, 
-    3778125865u, 
-    811880050u,  
+    4026531841u,
+    1138881939u,
+    2042196113u,
+    674490440u,
+    2172737629u,
+    3092268470u,
+    3778125865u,
+    811880050u,
 };
 
 // MU = P^{-1} mod 2^64  (used in Montgomery reduction)

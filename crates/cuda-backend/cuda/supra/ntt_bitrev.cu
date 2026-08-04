@@ -20,9 +20,8 @@ struct frac_fpext_t {
     bb31_4_t denom;
 };
 
-template<unsigned int Z_COUNT>
-__device__ __forceinline__ unsigned subgroup_sync_mask(uint32_t idx)
-{
+template <unsigned int Z_COUNT>
+__device__ __forceinline__ unsigned subgroup_sync_mask(uint32_t idx) {
     if constexpr (Z_COUNT >= WARP_SIZE) {
         return 0xffffffffu;
     } else {
@@ -44,16 +43,21 @@ __device__ __forceinline__ unsigned subgroup_sync_mask(uint32_t idx)
 
 // Permutes the data in an array such that data[i] = data[bit_reverse(i)]
 // and data[bit_reverse(i)] = data[i]
-template<typename T>
-__launch_bounds__(1024) __global__
-void bit_rev_permutation(T* d_out, const T *d_in, uint32_t lg_domain_size,
-                         uint32_t padded_poly_size, uint32_t poly_count)
-{
-    const uint32_t poly_idx = blockIdx.y + blockIdx.z * gridDim.y; // [DIFF]: use gridDim.y to calculate poly_idx
+template <typename T>
+__launch_bounds__(1024) __global__ void bit_rev_permutation(
+    T *d_out,
+    const T *d_in,
+    uint32_t lg_domain_size,
+    uint32_t padded_poly_size,
+    uint32_t poly_count
+) {
+    const uint32_t poly_idx =
+        blockIdx.y + blockIdx.z * gridDim.y; // [DIFF]: use gridDim.y to calculate poly_idx
     if (poly_idx >= poly_count)
         return;
-    d_out += static_cast<size_t>(poly_idx) * padded_poly_size; // [DIFF]: move out ptr to another row
-    d_in += static_cast<size_t>(poly_idx) * padded_poly_size;  // [DIFF]: move in ptr to another row
+    d_out +=
+        static_cast<size_t>(poly_idx) * padded_poly_size;     // [DIFF]: move out ptr to another row
+    d_in += static_cast<size_t>(poly_idx) * padded_poly_size; // [DIFF]: move in ptr to another row
 
     if (gridDim.x == 1 && blockDim.x == (1 << lg_domain_size)) {
         uint32_t idx = threadIdx.x;
@@ -79,22 +83,25 @@ void bit_rev_permutation(T* d_out, const T *d_in, uint32_t lg_domain_size,
     }
 }
 
-template<typename T, unsigned int Z_COUNT>
-__launch_bounds__(192, 2) __global__
-void bit_rev_permutation_z(T* out, const T* in, uint32_t lg_domain_size,
-                           uint32_t padded_poly_size, uint32_t poly_count)
-{
+template <typename T, unsigned int Z_COUNT>
+__launch_bounds__(192, 2) __global__ void bit_rev_permutation_z(
+    T *out,
+    const T *in,
+    uint32_t lg_domain_size,
+    uint32_t padded_poly_size,
+    uint32_t poly_count
+) {
     const uint32_t poly_idx = blockIdx.y + blockIdx.z * gridDim.y;
     if (poly_idx >= poly_count)
         return;
-    out += static_cast<size_t>(poly_idx) * padded_poly_size;   // [DIFF]: move out ptr to another row
-    in += static_cast<size_t>(poly_idx) * padded_poly_size;    // [DIFF]: move in ptr to another row
+    out += static_cast<size_t>(poly_idx) * padded_poly_size; // [DIFF]: move out ptr to another row
+    in += static_cast<size_t>(poly_idx) * padded_poly_size;  // [DIFF]: move in ptr to another row
 
     const uint32_t LG_Z_COUNT = 31 - __clz(Z_COUNT); // [DIFF]: use __clz to get lg2
 
     // Use byte array for extern shared memory to avoid symbol conflicts across template instantiations
     extern __shared__ unsigned char xchg_raw[];
-    T (*xchg)[Z_COUNT][Z_COUNT] = reinterpret_cast<T (*)[Z_COUNT][Z_COUNT]>(xchg_raw);
+    T(*xchg)[Z_COUNT][Z_COUNT] = reinterpret_cast<T(*)[Z_COUNT][Z_COUNT]>(xchg_raw);
 
     uint32_t gid = threadIdx.x / Z_COUNT;
     uint32_t idx = threadIdx.x % Z_COUNT;
@@ -104,10 +111,10 @@ void bit_rev_permutation_z(T* out, const T* in, uint32_t lg_domain_size,
     index_t step = (index_t)1 << (lg_domain_size - LG_Z_COUNT);
     index_t tid = threadIdx.x + blockDim.x * (index_t)blockIdx.x;
 
-    #pragma unroll 1
+#pragma unroll 1
     do {
         index_t group_idx = tid >> LG_Z_COUNT;
-        index_t group_rev = bit_rev(group_idx, lg_domain_size - 2*LG_Z_COUNT);
+        index_t group_rev = bit_rev(group_idx, lg_domain_size - 2 * LG_Z_COUNT);
 
         if (group_idx > group_rev)
             continue;
@@ -117,7 +124,7 @@ void bit_rev_permutation_z(T* out, const T* in, uint32_t lg_domain_size,
 
         T regs[Z_COUNT];
 
-        #pragma unroll
+#pragma unroll
         for (uint32_t i = 0; i < Z_COUNT; i++) {
             xchg[gid][i][rev] = (regs[i] = in[i * step + base_idx]);
             if (group_idx != group_rev)
@@ -129,7 +136,7 @@ void bit_rev_permutation_z(T* out, const T* in, uint32_t lg_domain_size,
         else
             __syncwarp(subgroup_mask);
 
-        #pragma unroll
+#pragma unroll
         for (uint32_t i = 0; i < Z_COUNT; i++)
             out[i * step + base_rev] = xchg[gid][rev][i];
 
@@ -141,7 +148,7 @@ void bit_rev_permutation_z(T* out, const T* in, uint32_t lg_domain_size,
         else
             __syncwarp(subgroup_mask);
 
-        #pragma unroll
+#pragma unroll
         for (uint32_t i = 0; i < Z_COUNT; i++)
             xchg[gid][i][rev] = regs[i];
 
@@ -150,19 +157,23 @@ void bit_rev_permutation_z(T* out, const T* in, uint32_t lg_domain_size,
         else
             __syncwarp(subgroup_mask);
 
-        #pragma unroll
+#pragma unroll
         for (uint32_t i = 0; i < Z_COUNT; i++)
             out[i * step + base_idx] = xchg[gid][rev][i];
 
-    } while (Z_COUNT <= WARP_SIZE && (tid += blockDim.x*gridDim.x) < step);
+    } while (Z_COUNT <= WARP_SIZE && (tid += blockDim.x * gridDim.x) < step);
     // without "Z_COUNT <= WARP_SIZE" compiler spills 128 bytes to stack
 }
 
-
-template<typename T>
-static int bit_rev_impl(T* d_out, const T* d_inp,
-    uint32_t lg_domain_size, uint32_t padded_poly_size, uint32_t poly_count, cudaStream_t stream)
-{
+template <typename T>
+static int bit_rev_impl(
+    T *d_out,
+    const T *d_inp,
+    uint32_t lg_domain_size,
+    uint32_t padded_poly_size,
+    uint32_t poly_count,
+    cudaStream_t stream
+) {
     size_t domain_size = (size_t)1 << lg_domain_size;
     // aim to read 4 cache lines of consecutive data per read
     const uint32_t Z_COUNT = 256 / sizeof(T);
@@ -178,15 +189,20 @@ static int bit_rev_impl(T* d_out, const T* d_inp,
 
     // [DIFF]: N -> dim3(N, poly_count) in grid_size; stream -> caller-provided stream
     if (domain_size <= 1024)
-        bit_rev_permutation<T><<<dim3(1u, grid_y, grid_z), domain_size, 0, stream>>>
-                            (d_out, d_inp, lg_domain_size, padded_poly_size, poly_count);
+        bit_rev_permutation<T><<<dim3(1u, grid_y, grid_z), domain_size, 0, stream>>>(
+            d_out, d_inp, lg_domain_size, padded_poly_size, poly_count
+        );
     else if (domain_size < bsize * Z_COUNT)
-        bit_rev_permutation<T><<<dim3(domain_size / WARP_SIZE, grid_y, grid_z), WARP_SIZE, 0, stream>>>
-                            (d_out, d_inp, lg_domain_size, padded_poly_size, poly_count);
+        bit_rev_permutation<T>
+            <<<dim3(domain_size / WARP_SIZE, grid_y, grid_z), WARP_SIZE, 0, stream>>>(
+                d_out, d_inp, lg_domain_size, padded_poly_size, poly_count
+            );
     else if (Z_COUNT > WARP_SIZE || lg_domain_size <= 32)
-        bit_rev_permutation_z<T, Z_COUNT><<<dim3(domain_size / Z_COUNT / bsize, grid_y, grid_z), bsize,
-                                            bsize * Z_COUNT * sizeof(T), stream>>>
-                            (d_out, d_inp, lg_domain_size, padded_poly_size, poly_count);
+        bit_rev_permutation_z<T, Z_COUNT>
+            <<<dim3(domain_size / Z_COUNT / bsize, grid_y, grid_z),
+               bsize,
+               bsize * Z_COUNT * sizeof(T),
+               stream>>>(d_out, d_inp, lg_domain_size, padded_poly_size, poly_count);
     else {
         // Those GPUs that can reserve 96KB of shared memory can
         // schedule 2 blocks to each SM...
@@ -195,28 +211,44 @@ static int bit_rev_impl(T* d_out, const T* d_inp,
         int sm_count;
         cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device);
 
-        bit_rev_permutation_z<T, Z_COUNT><<<dim3(sm_count * 2, grid_y, grid_z), 192,
-                                            192 * Z_COUNT * sizeof(T), stream>>>
-                                (d_out, d_inp, lg_domain_size, padded_poly_size, poly_count);
+        bit_rev_permutation_z<T, Z_COUNT>
+            <<<dim3(sm_count * 2, grid_y, grid_z), 192, 192 * Z_COUNT * sizeof(T), stream>>>(
+                d_out, d_inp, lg_domain_size, padded_poly_size, poly_count
+            );
     }
 
     return CHECK_KERNEL();
 }
 
-extern "C" int _bit_rev(fr_t* d_out, const fr_t* d_inp,
-    uint32_t lg_domain_size, uint32_t padded_poly_size, uint32_t poly_count, cudaStream_t stream)
-{
+extern "C" int _bit_rev(
+    fr_t *d_out,
+    const fr_t *d_inp,
+    uint32_t lg_domain_size,
+    uint32_t padded_poly_size,
+    uint32_t poly_count,
+    cudaStream_t stream
+) {
     return bit_rev_impl(d_out, d_inp, lg_domain_size, padded_poly_size, poly_count, stream);
 }
 
-extern "C" int _bit_rev_ext(bb31_4_t* d_out, const bb31_4_t* d_inp,
-    uint32_t lg_domain_size, uint32_t padded_poly_size, uint32_t poly_count, cudaStream_t stream)
-{
+extern "C" int _bit_rev_ext(
+    bb31_4_t *d_out,
+    const bb31_4_t *d_inp,
+    uint32_t lg_domain_size,
+    uint32_t padded_poly_size,
+    uint32_t poly_count,
+    cudaStream_t stream
+) {
     return bit_rev_impl(d_out, d_inp, lg_domain_size, padded_poly_size, poly_count, stream);
 }
 
-extern "C" int _bit_rev_frac_ext(frac_fpext_t* d_out, const frac_fpext_t* d_inp,
-    uint32_t lg_domain_size, uint32_t padded_poly_size, uint32_t poly_count, cudaStream_t stream)
-{
+extern "C" int _bit_rev_frac_ext(
+    frac_fpext_t *d_out,
+    const frac_fpext_t *d_inp,
+    uint32_t lg_domain_size,
+    uint32_t padded_poly_size,
+    uint32_t poly_count,
+    cudaStream_t stream
+) {
     return bit_rev_impl(d_out, d_inp, lg_domain_size, padded_poly_size, poly_count, stream);
 }
