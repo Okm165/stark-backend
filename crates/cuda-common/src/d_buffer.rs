@@ -12,9 +12,7 @@ use crate::{
     stream::{cudaStream_t, GpuDeviceCtx},
 };
 
-#[cfg_attr(not(gpu_vendor_amd), link(name = "cudart"))]
-#[cfg_attr(gpu_vendor_amd, link(name = "amdhip64"))]
-extern "C" {
+crate::gpu_link! {
     #[cfg_attr(gpu_vendor_amd, link_name = "hipMemsetAsync")]
     pub fn cudaMemsetAsync(dst: *mut c_void, value: i32, count: usize, stream: cudaStream_t)
         -> i32;

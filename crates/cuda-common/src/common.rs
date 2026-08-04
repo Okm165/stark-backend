@@ -5,9 +5,7 @@ use std::{
 
 use crate::error::{check, CudaError};
 
-#[cfg_attr(not(gpu_vendor_amd), link(name = "cudart"))]
-#[cfg_attr(gpu_vendor_amd, link(name = "amdhip64"))]
-extern "C" {
+crate::gpu_link! {
     #[cfg_attr(gpu_vendor_amd, link_name = "hipFree")]
     fn cudaFree(dev_ptr: *mut c_void) -> i32;
     #[cfg_attr(gpu_vendor_amd, link_name = "hipGetDevice")]
