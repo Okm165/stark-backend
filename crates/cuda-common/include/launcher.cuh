@@ -28,9 +28,6 @@ inline std::pair<dim3, dim3> kernel_launch_params(
     // Round block size up to a WARP_SIZE multiple: on AMD, __shfl_down from
     // inactive lanes returns stale VGPR data (not 0 as on NVIDIA), corrupting
     // any warp-level reduction in a partial warp.
-    // Skip rounding when threads_per_block < WARP_SIZE: callers that explicitly
-    // request a small block.x will set additional dimensions (block.y/z), and
-    // rounding would push the total thread count over the hardware maximum.
     if (threads_per_block >= WARP_SIZE) {
         block = ((block + WARP_SIZE - 1) / WARP_SIZE) * WARP_SIZE;
     }
@@ -47,29 +44,24 @@ inline std::pair<dim3, dim3> kernel_launch_2d_params(size_t x, size_t y) {
     return std::make_pair(grid, block);
 }
 
-#define CUDA_OK(expr)                                                                              \
-    do {                                                                                           \
-        cudaError_t err = expr;                                                                    \
-        if (err != cudaSuccess) {                                                                  \
-            fprintf(                                                                               \
-                stderr,                                                                            \
-                "CUDA kernel error at %s:%d: %s\n",                                                \
-                __FILE__,                                                                          \
-                __LINE__,                                                                          \
-                cudaGetErrorString(err)                                                            \
-            );                                                                                     \
-        }                                                                                          \
-    } while (0)
+#define CUDA_OK(expr) do {                                  \
+    cudaError_t err = expr;                                 \
+    if (err != cudaSuccess) {                               \
+        fprintf(stderr, "CUDA kernel error at %s:%d: %s\n", \
+            __FILE__, __LINE__, cudaGetErrorString(err));   \
+    }                                                       \
+} while(0)
 
 #ifdef CUDA_DEBUG
-inline int cuda_check_kernel(const char *kernel_name) {
-    cudaError_t err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) {
-        fprintf(stderr, "[ERROR] Kernel '%s' failed: %s\n", kernel_name, cudaGetErrorString(err));
+    inline int cuda_check_kernel(const char* kernel_name) {
+        cudaError_t err = cudaDeviceSynchronize();
+        if (err != cudaSuccess) {
+            fprintf(stderr, "[ERROR] Kernel '%s' failed: %s\n",
+                    kernel_name, cudaGetErrorString(err));
+        }
+        return err;
     }
-    return err;
-}
-#define CHECK_KERNEL() cuda_check_kernel(__func__)
+#   define CHECK_KERNEL() cuda_check_kernel(__func__)
 #else
-#define CHECK_KERNEL() cudaGetLastError()
+#   define CHECK_KERNEL() cudaGetLastError()
 #endif
