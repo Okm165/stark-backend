@@ -41,8 +41,6 @@ pub unsafe fn sponge_grind(
     validate_gpu_grind_bits(bits as usize)?;
     let mut d_result = DeviceBuffer::with_capacity_on(1, device_ctx);
     [u32::MAX].copy_to_on(&mut d_result, device_ctx)?;
-    let grind_start = std::time::Instant::now();
-    let mut iterations = 0u64;
     for start in (0..=max_witness).step_by(1 << bits) {
         CudaError::from_result(_sponge_grind(
             init_state,
@@ -54,17 +52,7 @@ pub unsafe fn sponge_grind(
         ))?;
 
         let result = d_result.to_host_on(device_ctx)?[0];
-        iterations += 1;
         if result < u32::MAX {
-            if grind_start.elapsed().as_millis() > 100 {
-                tracing::warn!(
-                    bits,
-                    iterations,
-                    elapsed_ms = grind_start.elapsed().as_millis() as u64,
-                    witness = result,
-                    "sponge_grind: slow grinding detected"
-                );
-            }
             return Ok(result);
         }
     }
