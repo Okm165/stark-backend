@@ -5,16 +5,10 @@
 namespace bn254_b32 {
 
 // ---------------------------------------------------------------------------
-// 256-bit helpers: wrapping add/sub with carry/borrow, multiply-accumulate.
+// 256-bit helpers: wrapping add/sub with carry/borrow
 //
-// Two vendor paths for optimal code generation:
-//   NVIDIA (PTX):  Explicit add.cc/subc.cc carry chains + mad.hi.cc/madc.hi.cc
-//                  multiply-accumulate. Required because nvcc cannot infer
-//                  carry-chain instructions from C++ patterns.
-//   AMD (HIP/GCN): C++ with #pragma unroll — LLVM reliably lowers to native
-//                  v_add_co_u32/v_add_co_ci_u32 carry chains and v_mad_u64_u32.
-//                  Explicit GCN asm is unnecessary and would add complexity
-//                  without performance benefit (verified by ISA inspection).
+// NVIDIA: inline PTX for carry-chain instructions (add.cc, sub.cc, mad.hi.cc).
+// HIP/AMD: portable uint64_t fallbacks (identical-quality v_add_co_u32 chains).
 // ---------------------------------------------------------------------------
 
 #ifdef __CUDA_ARCH__ // ─── NVIDIA PTX path ───
@@ -243,25 +237,9 @@ mul_small_and_acc(uint32_t high[8], const uint32_t lhs[8], uint32_t rhs, const u
 
 #else // ─── Portable path (HIP / non-CUDA) ───
 
-// On AMD (HIP device): hipcc/LLVM compiles these patterns to native GCN:
-//   add256_ret: 1× v_add_co_u32 + 7× v_add_co_ci_u32 + 1× v_cndmask_b32 (= 9 ops)
-//   sub256_ret: 1× v_sub_co_u32 + 7× v_sub_co_ci_u32 + 1× v_cndmask_b32 (= 9 ops)
-//   mul_small:  8× v_mad_u64_u32 (sequential, quarter-rate) (= 8 ops)
-//   mul_small_and_acc: 8× v_mad_u64_u32 with addend (= 8 ops)
-//
-// The C++ patterns below are designed for LLVM's backend to recognize and lower
-// to optimal GCN instructions. Explicit inline asm is not needed because:
-// 1. LLVM reliably recognizes `(uint64_t)a + b + carry` → v_add_co_u32 chains
-// 2. LLVM reliably recognizes `(uint64_t)a * b + c` → v_mad_u64_u32
-// 3. The compiler can freely schedule registers without =& constraints
-// 4. Verified via ISA inspection to produce identical quality to explicit asm
-//
-// On host: standard C++ for unit tests and verification.
-
 static __device__ __forceinline__ uint32_t
 add256_ret(uint32_t r[8], const uint32_t a[8], const uint32_t b[8]) {
     uint32_t carry = 0;
-#pragma unroll
     for (int i = 0; i < 8; i++) {
         uint64_t sum = (uint64_t)a[i] + b[i] + carry;
         r[i] = (uint32_t)sum;
@@ -273,7 +251,6 @@ add256_ret(uint32_t r[8], const uint32_t a[8], const uint32_t b[8]) {
 static __device__ __forceinline__ uint32_t
 sub256_ret(uint32_t r[8], const uint32_t a[8], const uint32_t b[8]) {
     uint32_t borrow = 0;
-#pragma unroll
     for (int i = 0; i < 8; i++) {
         uint64_t diff = (uint64_t)a[i] - b[i] - borrow;
         r[i] = (uint32_t)diff;
@@ -286,7 +263,6 @@ static __device__ __forceinline__ uint32_t
 mul_small(uint32_t high[8], const uint32_t lhs[8], uint32_t rhs) {
     uint64_t carry = 0;
     uint32_t r0;
-#pragma unroll
     for (int i = 0; i < 8; i++) {
         uint64_t prod = (uint64_t)lhs[i] * rhs + carry;
         if (i == 0)
@@ -303,7 +279,6 @@ static __device__ __forceinline__ uint32_t
 mul_small_and_acc(uint32_t high[8], const uint32_t lhs[8], uint32_t rhs, const uint32_t add[8]) {
     uint64_t carry = 0;
     uint32_t r0;
-#pragma unroll
     for (int i = 0; i < 8; i++) {
         uint64_t prod = (uint64_t)lhs[i] * rhs + add[i] + carry;
         if (i == 0)
@@ -335,7 +310,6 @@ static __device__ __forceinline__ void imr(uint32_t r[8], uint32_t acc0, const u
     if (borrow) {
         add256_ret(r, sub, BN254_P_32);
     } else {
-#pragma unroll
         for (int i = 0; i < 8; i++)
             r[i] = sub[i];
     }
@@ -384,11 +358,9 @@ static __device__ __forceinline__ Bn254Fr32 bn254_add(Bn254Fr32 a, Bn254Fr32 b) 
     uint32_t sub[8];
     uint32_t borrow = sub256_ret(sub, sum, BN254_P_32);
     if (overflow || !borrow) {
-#pragma unroll
         for (int i = 0; i < 8; i++)
             r.limbs[i] = sub[i];
     } else {
-#pragma unroll
         for (int i = 0; i < 8; i++)
             r.limbs[i] = sum[i];
     }
@@ -402,7 +374,6 @@ static __device__ __forceinline__ Bn254Fr32 bn254_sub(Bn254Fr32 a, Bn254Fr32 b) 
     if (borrow) {
         add256_ret(r.limbs, diff, BN254_P_32);
     } else {
-#pragma unroll
         for (int i = 0; i < 8; i++)
             r.limbs[i] = diff[i];
     }
@@ -483,20 +454,16 @@ static __device__ __forceinline__ Bn254Fr32 bn254_pack_base_2_31(const uint32_t 
 
 template <int WIDTH> static __device__ __forceinline__ void bn254_mds_external(Bn254Fr32 s[WIDTH]) {
     Bn254Fr32 sum = s[0];
-#pragma unroll
     for (int i = 1; i < WIDTH; i++)
         sum = bn254_add(sum, s[i]);
-#pragma unroll
     for (int i = 0; i < WIDTH; i++)
         s[i] = bn254_add(s[i], sum);
 }
 
 template <int WIDTH> static __device__ __forceinline__ void bn254_mds_internal(Bn254Fr32 s[WIDTH]) {
     Bn254Fr32 sum = s[0];
-#pragma unroll
     for (int i = 1; i < WIDTH; i++)
         sum = bn254_add(sum, s[i]);
-#pragma unroll
     for (int i = 0; i < WIDTH - 1; i++)
         s[i] = bn254_add(s[i], sum);
     s[WIDTH - 1] = bn254_add(bn254_double(s[WIDTH - 1]), sum);
