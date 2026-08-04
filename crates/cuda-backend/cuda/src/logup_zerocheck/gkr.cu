@@ -24,9 +24,7 @@ constexpr int GKR_SP_DEG = 2;
 // ============================================================================
 // KERNELS
 // ============================================================================
-__device__ __forceinline__ uint32_t lg_pow2(uint32_t x) {
-    return 31u - __clz(x);
-}
+__device__ __forceinline__ uint32_t lg_pow2(uint32_t x) { return 31u - __clz(x); }
 
 __device__ __forceinline__ FpExt virtual_padding_q(FpExt alpha, uint32_t subtree_len) {
     FpExt q = alpha;
@@ -99,8 +97,7 @@ __global__ void frac_build_tree_layer_kernel(
             FracExt rhs_leaf = FracExt::zero();
             bool has_rhs_leaf = false;
             if (in_range) {
-                const uint32_t parent_start =
-                    rev_len(idx, lg_pow2(parent_active_size)) << 1;
+                const uint32_t parent_start = rev_len(idx, lg_pow2(parent_active_size)) << 1;
 
                 if (parent_start < real_len) {
                     lhs_val = layer[parent_start];
@@ -134,12 +131,13 @@ __global__ void frac_build_tree_layer_kernel(
     }
 
     uint32_t lhs_active_size = revert ? half : layer_size;
-    FracExt lhs = virtual_mode
-        ? virtual_node_value(layer, idx, lhs_active_size, real_len, logical_len, alpha)
-        : layer[idx];
-    FracExt rhs = virtual_mode
-        ? virtual_node_value(layer, idx | half, layer_size, real_len, logical_len, alpha)
-        : layer[idx | half];
+    FracExt lhs =
+        virtual_mode ? virtual_node_value(layer, idx, lhs_active_size, real_len, logical_len, alpha)
+                     : layer[idx];
+    FracExt rhs =
+        virtual_mode
+            ? virtual_node_value(layer, idx | half, layer_size, real_len, logical_len, alpha)
+            : layer[idx | half];
 
     if constexpr (apply_alpha) {
         // When applying alpha, we need to modify both operands before combining
@@ -161,14 +159,7 @@ __global__ void frac_build_tree_layer_kernel(
     }
 
     if (virtual_mode) {
-        virtual_node_store(
-            layer,
-            idx,
-            revert ? layer_size : half,
-            real_len,
-            logical_len,
-            lhs
-        );
+        virtual_node_store(layer, idx, revert ? layer_size : half, real_len, logical_len, lhs);
     } else {
         layer[idx] = lhs;
     }
@@ -193,9 +184,16 @@ __device__ __forceinline__ void accumulate_compute_contributions(
     uint32_t idx,
     uint32_t log_eq_low_cap,
     FpExt lambda,
-    FpExt p0_even, FpExt q0_even, FpExt p0_odd, FpExt q0_odd,
-    FpExt p1_even, FpExt q1_even, FpExt p1_odd, FpExt q1_odd,
-    FpExt &local0, FpExt &local1
+    FpExt p0_even,
+    FpExt q0_even,
+    FpExt p0_odd,
+    FpExt q0_odd,
+    FpExt p1_even,
+    FpExt q1_even,
+    FpExt p1_odd,
+    FpExt q1_odd,
+    FpExt &local0,
+    FpExt &local1
 ) {
     FpExt eq_val = sqrt_buffer_get(eq_xi_low, eq_xi_high, log_eq_low_cap, idx);
 
@@ -220,25 +218,30 @@ __device__ __forceinline__ void accumulate_compute_contributions(
         q_j1 += q1_diff;
 
         FpExt contrib = eq_val * (p_j0 * q_j1 + p_j1 * q_j0);
-        if (i == 0) local0 += contrib;
-        else local1 += contrib;
+        if (i == 0)
+            local0 += contrib;
+        else
+            local1 += contrib;
     }
 }
 
 // Helper: Perform block reduction on two accumulators and write to block_sums.
 __device__ __forceinline__ void reduce_block_sums(
     FpExt *shared,
-    FpExt local0, FpExt local1,
+    FpExt local0,
+    FpExt local1,
     FpExt *__restrict__ block_sums
 ) {
     {
         FpExt reduced = sumcheck::block_reduce_sum(local0, shared);
-        if (threadIdx.x == 0) block_sums[blockIdx.x * GKR_SP_DEG + 0] = reduced;
+        if (threadIdx.x == 0)
+            block_sums[blockIdx.x * GKR_SP_DEG + 0] = reduced;
     }
     __syncthreads();
     {
         FpExt reduced = sumcheck::block_reduce_sum(local1, shared);
-        if (threadIdx.x == 0) block_sums[blockIdx.x * GKR_SP_DEG + 1] = reduced;
+        if (threadIdx.x == 0)
+            block_sums[blockIdx.x * GKR_SP_DEG + 1] = reduced;
     }
 }
 
@@ -326,20 +329,20 @@ __global__ void fold_ef_columns_kernel(
     uint32_t half = quarter << 1;
     bool virtual_mode = real_len < logical_len;
 
-    FracExt a = virtual_mode
-        ? virtual_node_value(src, idx, size, real_len, logical_len, alpha)
-        : src[idx];
+    FracExt a =
+        virtual_mode ? virtual_node_value(src, idx, size, real_len, logical_len, alpha) : src[idx];
     FracExt b = virtual_mode
-        ? virtual_node_value(src, idx + quarter, size, real_len, logical_len, alpha)
-        : src[idx + quarter];
+                    ? virtual_node_value(src, idx + quarter, size, real_len, logical_len, alpha)
+                    : src[idx + quarter];
     dst[idx] = {a.p + r * (b.p - a.p), a.q + r * (b.q - a.q)};
 
     FracExt c = virtual_mode
-        ? virtual_node_value(src, idx + half, size, real_len, logical_len, alpha)
-        : src[idx + half];
-    FracExt d = virtual_mode
-        ? virtual_node_value(src, idx + half + quarter, size, real_len, logical_len, alpha)
-        : src[idx + half + quarter];
+                    ? virtual_node_value(src, idx + half, size, real_len, logical_len, alpha)
+                    : src[idx + half];
+    FracExt d =
+        virtual_mode
+            ? virtual_node_value(src, idx + half + quarter, size, real_len, logical_len, alpha)
+            : src[idx + half + quarter];
     dst[idx + quarter] = {c.p + r * (d.p - c.p), c.q + r * (d.q - c.q)};
 }
 
@@ -360,16 +363,16 @@ __global__ void fold_ef_columns_kernel(
 __global__ void compute_round_and_fold_kernel(
     const FpExt *__restrict__ eq_xi_low,
     const FpExt *__restrict__ eq_xi_high,
-    const FracExt *__restrict__ src_pq,  // Pre-fold buffer (2*pq_size FracExt)
-    uint32_t num_x,                      // post-fold num_x (= pq_size / 2)
+    const FracExt *__restrict__ src_pq, // Pre-fold buffer (2*pq_size FracExt)
+    uint32_t num_x,                     // post-fold num_x (= pq_size / 2)
     uint32_t real_len,
     uint32_t logical_len,
     uint32_t log_eq_low_cap,
     FpExt lambda,
-    FpExt r_prev,                        // Previous round's challenge for folding
+    FpExt r_prev, // Previous round's challenge for folding
     FpExt alpha,
-    FpExt *__restrict__ block_sums,      // Output: [gridDim.x * 2]
-    FracExt *__restrict__ dst_pq         // Post-fold buffer (pq_size FracExt)
+    FpExt *__restrict__ block_sums, // Output: [gridDim.x * 2]
+    FracExt *__restrict__ dst_pq    // Post-fold buffer (pq_size FracExt)
 ) {
     extern __shared__ FpExt shared[];
     const uint32_t pq_size = 2 * num_x;
@@ -377,10 +380,10 @@ __global__ void compute_round_and_fold_kernel(
     const bool virtual_mode = real_len < logical_len;
 
     // Index offsets for fold pattern (see detailed comments in inplace kernel)
-    const uint32_t half = pq_size;              // src_pq_size / 2
-    const uint32_t quarter = pq_size >> 1;      // pq_size / 2
-    const uint32_t eighth = pq_size >> 2;       // pq_size / 4
-    const uint32_t three_eighths = eighth * 3;  // 3 * pq_size / 4
+    const uint32_t half = pq_size;             // src_pq_size / 2
+    const uint32_t quarter = pq_size >> 1;     // pq_size / 2
+    const uint32_t eighth = pq_size >> 2;      // pq_size / 4
+    const uint32_t three_eighths = eighth * 3; // 3 * pq_size / 4
 
     // Use scalar accumulators instead of array to help register allocation
     const FpExt zero(Fp::zero());
@@ -396,12 +399,16 @@ __global__ void compute_round_and_fold_kernel(
         // Load pairs in tight scopes, fold, write immediately to reduce register pressure
         // f00 at post-fold idx
         {
-            FracExt a = virtual_mode
-                ? virtual_node_value(src_pq, idx, src_active_size, real_len, logical_len, alpha)
-                : src_pq[idx];
-            FracExt b = virtual_mode
-                ? virtual_node_value(src_pq, idx + quarter, src_active_size, real_len, logical_len, alpha)
-                : src_pq[idx + quarter];
+            FracExt a =
+                virtual_mode
+                    ? virtual_node_value(src_pq, idx, src_active_size, real_len, logical_len, alpha)
+                    : src_pq[idx];
+            FracExt b =
+                virtual_mode
+                    ? virtual_node_value(
+                          src_pq, idx + quarter, src_active_size, real_len, logical_len, alpha
+                      )
+                    : src_pq[idx + quarter];
             p0_even = a.p + r_prev * (b.p - a.p);
             q0_even = a.q + r_prev * (b.q - a.q);
             dst_pq[idx] = {p0_even, q0_even};
@@ -409,45 +416,79 @@ __global__ void compute_round_and_fold_kernel(
         // f10 at post-fold idx + quarter
         {
             FracExt a = virtual_mode
-                ? virtual_node_value(src_pq, idx + half, src_active_size, real_len, logical_len, alpha)
-                : src_pq[idx + half];
-            FracExt b = virtual_mode
-                ? virtual_node_value(src_pq, idx + half + quarter, src_active_size, real_len, logical_len, alpha)
-                : src_pq[idx + half + quarter];
+                            ? virtual_node_value(
+                                  src_pq, idx + half, src_active_size, real_len, logical_len, alpha
+                              )
+                            : src_pq[idx + half];
+            FracExt b = virtual_mode ? virtual_node_value(
+                                           src_pq,
+                                           idx + half + quarter,
+                                           src_active_size,
+                                           real_len,
+                                           logical_len,
+                                           alpha
+                                       )
+                                     : src_pq[idx + half + quarter];
             p1_even = a.p + r_prev * (b.p - a.p);
             q1_even = a.q + r_prev * (b.q - a.q);
             dst_pq[idx + quarter] = {p1_even, q1_even};
         }
         // f01 at post-fold idx + eighth
         {
-            FracExt a = virtual_mode
-                ? virtual_node_value(src_pq, idx + eighth, src_active_size, real_len, logical_len, alpha)
-                : src_pq[idx + eighth];
-            FracExt b = virtual_mode
-                ? virtual_node_value(src_pq, idx + three_eighths, src_active_size, real_len, logical_len, alpha)
-                : src_pq[idx + three_eighths];
+            FracExt a =
+                virtual_mode
+                    ? virtual_node_value(
+                          src_pq, idx + eighth, src_active_size, real_len, logical_len, alpha
+                      )
+                    : src_pq[idx + eighth];
+            FracExt b =
+                virtual_mode
+                    ? virtual_node_value(
+                          src_pq, idx + three_eighths, src_active_size, real_len, logical_len, alpha
+                      )
+                    : src_pq[idx + three_eighths];
             p0_odd = a.p + r_prev * (b.p - a.p);
             q0_odd = a.q + r_prev * (b.q - a.q);
             dst_pq[idx + eighth] = {p0_odd, q0_odd};
         }
         // f11 at post-fold idx + three_eighths
         {
-            FracExt a = virtual_mode
-                ? virtual_node_value(src_pq, idx + half + eighth, src_active_size, real_len, logical_len, alpha)
-                : src_pq[idx + half + eighth];
-            FracExt b = virtual_mode
-                ? virtual_node_value(src_pq, idx + half + three_eighths, src_active_size, real_len, logical_len, alpha)
-                : src_pq[idx + half + three_eighths];
+            FracExt a =
+                virtual_mode
+                    ? virtual_node_value(
+                          src_pq, idx + half + eighth, src_active_size, real_len, logical_len, alpha
+                      )
+                    : src_pq[idx + half + eighth];
+            FracExt b = virtual_mode ? virtual_node_value(
+                                           src_pq,
+                                           idx + half + three_eighths,
+                                           src_active_size,
+                                           real_len,
+                                           logical_len,
+                                           alpha
+                                       )
+                                     : src_pq[idx + half + three_eighths];
             p1_odd = a.p + r_prev * (b.p - a.p);
             q1_odd = a.q + r_prev * (b.q - a.q);
             dst_pq[idx + three_eighths] = {p1_odd, q1_odd};
         }
 
         accumulate_compute_contributions(
-            eq_xi_low, eq_xi_high, idx, log_eq_low_cap, lambda,
-            p0_even, q0_even, p0_odd, q0_odd,
-            p1_even, q1_even, p1_odd, q1_odd,
-            local0, local1
+            eq_xi_low,
+            eq_xi_high,
+            idx,
+            log_eq_low_cap,
+            lambda,
+            p0_even,
+            q0_even,
+            p0_odd,
+            q0_odd,
+            p1_even,
+            q1_even,
+            p1_odd,
+            q1_odd,
+            local0,
+            local1
         );
     }
 
@@ -469,17 +510,17 @@ __global__ void compute_round_and_fold_kernel(
 __global__ void compute_round_and_fold_inplace_kernel(
     const FpExt *__restrict__ eq_xi_low,
     const FpExt *__restrict__ eq_xi_high,
-    FracExt *pq,                         // In-place buffer: reads 2*pq_size, writes pq_size
-    uint32_t num_x,                      // post-fold num_x (= pq_size / 2)
+    FracExt *pq,    // In-place buffer: reads 2*pq_size, writes pq_size
+    uint32_t num_x, // post-fold num_x (= pq_size / 2)
     uint32_t real_len,
     uint32_t logical_len,
     uint32_t dst_real_len,
     uint32_t dst_logical_len,
     uint32_t log_eq_low_cap,
     FpExt lambda,
-    FpExt r_prev,                        // Previous round's challenge for folding
+    FpExt r_prev, // Previous round's challenge for folding
     FpExt alpha,
-    FpExt *__restrict__ block_sums       // Output: [gridDim.x * 2]
+    FpExt *__restrict__ block_sums // Output: [gridDim.x * 2]
 ) {
     extern __shared__ FpExt shared[];
     const uint32_t pq_size = 2 * num_x;
@@ -498,10 +539,10 @@ __global__ void compute_round_and_fold_inplace_kernel(
     //
     // Post-fold indices for compute: idx, idx+quarter, idx+eighth, idx+three_eighths
     // where quarter = pq_size/2, eighth = pq_size/4
-    const uint32_t half = pq_size;              // src_pq_size / 2
-    const uint32_t quarter = pq_size >> 1;      // pq_size / 2
-    const uint32_t eighth = pq_size >> 2;       // pq_size / 4
-    const uint32_t three_eighths = eighth * 3;  // 3 * pq_size / 4
+    const uint32_t half = pq_size;             // src_pq_size / 2
+    const uint32_t quarter = pq_size >> 1;     // pq_size / 2
+    const uint32_t eighth = pq_size >> 2;      // pq_size / 4
+    const uint32_t three_eighths = eighth * 3; // 3 * pq_size / 4
 
     // Use scalar accumulators instead of array to help register allocation
     const FpExt zero(Fp::zero());
@@ -521,12 +562,15 @@ __global__ void compute_round_and_fold_inplace_kernel(
 
         // Pair 1: f00 (idx -> p0_even, q0_even)
         {
-            FracExt a = virtual_mode
-                ? virtual_node_value(pq, idx, src_active_size, real_len, logical_len, alpha)
-                : pq[idx];
+            FracExt a =
+                virtual_mode
+                    ? virtual_node_value(pq, idx, src_active_size, real_len, logical_len, alpha)
+                    : pq[idx];
             FracExt b = virtual_mode
-                ? virtual_node_value(pq, idx + quarter, src_active_size, real_len, logical_len, alpha)
-                : pq[idx + quarter];
+                            ? virtual_node_value(
+                                  pq, idx + quarter, src_active_size, real_len, logical_len, alpha
+                              )
+                            : pq[idx + quarter];
             p0_even = a.p + r_prev * (b.p - a.p);
             q0_even = a.q + r_prev * (b.q - a.q);
         }
@@ -534,11 +578,16 @@ __global__ void compute_round_and_fold_inplace_kernel(
         // Pair 2: f10 (idx + half -> p1_even, q1_even)
         {
             FracExt a = virtual_mode
-                ? virtual_node_value(pq, idx + half, src_active_size, real_len, logical_len, alpha)
-                : pq[idx + half];
-            FracExt b = virtual_mode
-                ? virtual_node_value(pq, idx + half + quarter, src_active_size, real_len, logical_len, alpha)
-                : pq[idx + half + quarter];
+                            ? virtual_node_value(
+                                  pq, idx + half, src_active_size, real_len, logical_len, alpha
+                              )
+                            : pq[idx + half];
+            FracExt b =
+                virtual_mode
+                    ? virtual_node_value(
+                          pq, idx + half + quarter, src_active_size, real_len, logical_len, alpha
+                      )
+                    : pq[idx + half + quarter];
             p1_even = a.p + r_prev * (b.p - a.p);
             q1_even = a.q + r_prev * (b.q - a.q);
         }
@@ -546,23 +595,37 @@ __global__ void compute_round_and_fold_inplace_kernel(
         // Pair 3: f01 (idx + eighth -> p0_odd, q0_odd)
         {
             FracExt a = virtual_mode
-                ? virtual_node_value(pq, idx + eighth, src_active_size, real_len, logical_len, alpha)
-                : pq[idx + eighth];
-            FracExt b = virtual_mode
-                ? virtual_node_value(pq, idx + three_eighths, src_active_size, real_len, logical_len, alpha)
-                : pq[idx + three_eighths];
+                            ? virtual_node_value(
+                                  pq, idx + eighth, src_active_size, real_len, logical_len, alpha
+                              )
+                            : pq[idx + eighth];
+            FracExt b =
+                virtual_mode
+                    ? virtual_node_value(
+                          pq, idx + three_eighths, src_active_size, real_len, logical_len, alpha
+                      )
+                    : pq[idx + three_eighths];
             p0_odd = a.p + r_prev * (b.p - a.p);
             q0_odd = a.q + r_prev * (b.q - a.q);
         }
 
         // Pair 4: f11 (idx + half + eighth -> p1_odd, q1_odd)
         {
-            FracExt a = virtual_mode
-                ? virtual_node_value(pq, idx + half + eighth, src_active_size, real_len, logical_len, alpha)
-                : pq[idx + half + eighth];
-            FracExt b = virtual_mode
-                ? virtual_node_value(pq, idx + half + three_eighths, src_active_size, real_len, logical_len, alpha)
-                : pq[idx + half + three_eighths];
+            FracExt a =
+                virtual_mode
+                    ? virtual_node_value(
+                          pq, idx + half + eighth, src_active_size, real_len, logical_len, alpha
+                      )
+                    : pq[idx + half + eighth];
+            FracExt b = virtual_mode ? virtual_node_value(
+                                           pq,
+                                           idx + half + three_eighths,
+                                           src_active_size,
+                                           real_len,
+                                           logical_len,
+                                           alpha
+                                       )
+                                     : pq[idx + half + three_eighths];
             p1_odd = a.p + r_prev * (b.p - a.p);
             q1_odd = a.q + r_prev * (b.q - a.q);
         }
@@ -571,37 +634,15 @@ __global__ void compute_round_and_fold_inplace_kernel(
         // In compact virtual mode, padding-only output slots are left untouched so they do not race
         // with spilled real leaves that may still be read by neighboring threads.
         if (dst_real_len < dst_logical_len) {
+            virtual_node_store(pq, idx, pq_size, dst_real_len, dst_logical_len, {p0_even, q0_even});
             virtual_node_store(
-                pq,
-                idx,
-                pq_size,
-                dst_real_len,
-                dst_logical_len,
-                {p0_even, q0_even}
+                pq, idx + quarter, pq_size, dst_real_len, dst_logical_len, {p1_even, q1_even}
             );
             virtual_node_store(
-                pq,
-                idx + quarter,
-                pq_size,
-                dst_real_len,
-                dst_logical_len,
-                {p1_even, q1_even}
+                pq, idx + eighth, pq_size, dst_real_len, dst_logical_len, {p0_odd, q0_odd}
             );
             virtual_node_store(
-                pq,
-                idx + eighth,
-                pq_size,
-                dst_real_len,
-                dst_logical_len,
-                {p0_odd, q0_odd}
-            );
-            virtual_node_store(
-                pq,
-                idx + three_eighths,
-                pq_size,
-                dst_real_len,
-                dst_logical_len,
-                {p1_odd, q1_odd}
+                pq, idx + three_eighths, pq_size, dst_real_len, dst_logical_len, {p1_odd, q1_odd}
             );
         } else {
             pq[idx] = {p0_even, q0_even};
@@ -611,10 +652,21 @@ __global__ void compute_round_and_fold_inplace_kernel(
         }
 
         accumulate_compute_contributions(
-            eq_xi_low, eq_xi_high, idx, log_eq_low_cap, lambda,
-            p0_even, q0_even, p0_odd, q0_odd,
-            p1_even, q1_even, p1_odd, q1_odd,
-            local0, local1
+            eq_xi_low,
+            eq_xi_high,
+            idx,
+            log_eq_low_cap,
+            lambda,
+            p0_even,
+            q0_even,
+            p0_odd,
+            q0_odd,
+            p1_even,
+            q1_even,
+            p1_odd,
+            q1_odd,
+            local0,
+            local1
         );
     }
 
@@ -643,19 +695,19 @@ __global__ void compute_round_and_fold_inplace_kernel(
 __global__ void compute_round_and_revert_kernel(
     const FpExt *__restrict__ eq_xi_low,
     const FpExt *__restrict__ eq_xi_high,
-    FracExt *__restrict__ layer,         // Tree layer buffer (modified in-place for revert)
+    FracExt *__restrict__ layer, // Tree layer buffer (modified in-place for revert)
     uint32_t num_x,
     uint32_t real_len,
     uint32_t logical_len,
     uint32_t log_eq_low_cap,
     FpExt lambda,
     FpExt alpha,
-    FpExt *__restrict__ block_sums       // Output: [gridDim.x * 2]
+    FpExt *__restrict__ block_sums // Output: [gridDim.x * 2]
 ) {
     extern __shared__ FpExt shared[];
     const uint32_t pq_size = 2 * num_x;
-    const uint32_t half = pq_size >> 1;     // pq_size / 2
-    const uint32_t quarter = pq_size >> 2;  // pq_size / 4
+    const uint32_t half = pq_size >> 1;    // pq_size / 2
+    const uint32_t quarter = pq_size >> 2; // pq_size / 4
     const bool virtual_mode = real_len < logical_len;
     const uint32_t parent_active_size = half;
     const uint32_t child_active_size = pq_size;
@@ -677,25 +729,23 @@ __global__ void compute_round_and_revert_kernel(
         // Compute p0_even by reverting with p1_even (frac_unadd)
         {
             FracExt lhs = virtual_mode
-                ? virtual_node_value(layer, idx, parent_active_size, real_len, logical_len, alpha)
-                : layer[idx];
-            FracExt rhs = virtual_mode
-                ? virtual_node_value(layer, idx + half, child_active_size, real_len, logical_len, alpha)
-                : layer[idx + half];
+                              ? virtual_node_value(
+                                    layer, idx, parent_active_size, real_len, logical_len, alpha
+                                )
+                              : layer[idx];
+            FracExt rhs =
+                virtual_mode
+                    ? virtual_node_value(
+                          layer, idx + half, child_active_size, real_len, logical_len, alpha
+                      )
+                    : layer[idx + half];
             FpExt rhs_q_inv = inv(rhs.q);
             q0_even = lhs.q * rhs_q_inv;
             p0_even = (lhs.p - q0_even * rhs.p) * rhs_q_inv;
             p1_even = rhs.p;
             q1_even = rhs.q;
             if (virtual_mode) {
-                virtual_node_store(
-                    layer,
-                    idx,
-                    pq_size,
-                    real_len,
-                    logical_len,
-                    {p0_even, q0_even}
-                );
+                virtual_node_store(layer, idx, pq_size, real_len, logical_len, {p0_even, q0_even});
             } else {
                 layer[idx] = {p0_even, q0_even};
             }
@@ -703,26 +753,21 @@ __global__ void compute_round_and_revert_kernel(
 
         // Compute p0_odd by reverting with p1_odd (frac_unadd)
         {
-            FracExt lhs = virtual_mode
-                ? virtual_node_value(
-                    layer,
-                    idx + quarter,
-                    parent_active_size,
-                    real_len,
-                    logical_len,
-                    alpha
-                )
-                : layer[idx + quarter];
-            FracExt rhs = virtual_mode
-                ? virtual_node_value(
-                    layer,
-                    idx + half + quarter,
-                    child_active_size,
-                    real_len,
-                    logical_len,
-                    alpha
-                )
-                : layer[idx + half + quarter];
+            FracExt lhs =
+                virtual_mode
+                    ? virtual_node_value(
+                          layer, idx + quarter, parent_active_size, real_len, logical_len, alpha
+                      )
+                    : layer[idx + quarter];
+            FracExt rhs = virtual_mode ? virtual_node_value(
+                                             layer,
+                                             idx + half + quarter,
+                                             child_active_size,
+                                             real_len,
+                                             logical_len,
+                                             alpha
+                                         )
+                                       : layer[idx + half + quarter];
             FpExt rhs_q_inv = inv(rhs.q);
             q0_odd = lhs.q * rhs_q_inv;
             p0_odd = (lhs.p - q0_odd * rhs.p) * rhs_q_inv;
@@ -730,12 +775,7 @@ __global__ void compute_round_and_revert_kernel(
             q1_odd = rhs.q;
             if (virtual_mode) {
                 virtual_node_store(
-                    layer,
-                    idx + quarter,
-                    pq_size,
-                    real_len,
-                    logical_len,
-                    {p0_odd, q0_odd}
+                    layer, idx + quarter, pq_size, real_len, logical_len, {p0_odd, q0_odd}
                 );
             } else {
                 layer[idx + quarter] = {p0_odd, q0_odd};
@@ -743,10 +783,21 @@ __global__ void compute_round_and_revert_kernel(
         }
 
         accumulate_compute_contributions(
-            eq_xi_low, eq_xi_high, idx, log_eq_low_cap, lambda,
-            p0_even, q0_even, p0_odd, q0_odd,
-            p1_even, q1_even, p1_odd, q1_odd,
-            local0, local1
+            eq_xi_low,
+            eq_xi_high,
+            idx,
+            log_eq_low_cap,
+            lambda,
+            p0_even,
+            q0_even,
+            p0_odd,
+            q0_odd,
+            p1_even,
+            q1_even,
+            p1_odd,
+            q1_odd,
+            local0,
+            local1
         );
     }
 
@@ -772,9 +823,9 @@ __global__ void precompute_m_build_partial_kernel(
     const FracExt *__restrict__ pq,
     uint32_t real_len,
     uint32_t logical_len,
-    uint32_t rem_n,          // number of variables AFTER fold (folded rem_n)
+    uint32_t rem_n, // number of variables AFTER fold (folded rem_n)
     FpExt lambda,
-    FpExt r_prev,            // challenge for the inline fold (only used when inline_fold=true)
+    FpExt r_prev, // challenge for the inline fold (only used when inline_fold=true)
     FpExt alpha,
     const FpExt *__restrict__ eq_tail_low,
     const FpExt *__restrict__ eq_tail_high,
@@ -823,9 +874,7 @@ __global__ void precompute_m_build_partial_kernel(
         // Phase 1: Load weights into shared memory.
         for (uint32_t bi = lane; bi < batch; bi += threads) {
             uint32_t b = b0 + bi;
-            sh_weight[bi] = sqrt_buffer_get(
-                eq_tail_low, eq_tail_high, log_eq_tail_low_cap, b
-            );
+            sh_weight[bi] = sqrt_buffer_get(eq_tail_low, eq_tail_high, log_eq_tail_low_cap, b);
         }
         __syncthreads();
 
@@ -838,39 +887,51 @@ __global__ void precompute_m_build_partial_kernel(
             FpExt p0, q0, p1, q1;
             if constexpr (inline_fold) {
                 // Inline fold: val = lo + r_prev * (hi - lo) for each of {p0, q0, p1, q1}.
-                FracExt f0_lo = virtual_mode
-                    ? virtual_node_value(pq, src, active_size, real_len, logical_len, alpha)
-                    : pq[src];
-                FracExt f0_hi = virtual_mode
-                    ? virtual_node_value(pq, src + fold_half, active_size, real_len, logical_len, alpha)
-                    : pq[src + fold_half];
-                FracExt f1_lo = virtual_mode
-                    ? virtual_node_value(pq, poly_stride + src, active_size, real_len, logical_len, alpha)
-                    : pq[poly_stride + src];
-                FracExt f1_hi = virtual_mode
-                    ? virtual_node_value(
-                        pq,
-                        poly_stride + src + fold_half,
-                        active_size,
-                        real_len,
-                        logical_len,
-                        alpha
-                    )
-                    : pq[poly_stride + src + fold_half];
+                FracExt f0_lo =
+                    virtual_mode
+                        ? virtual_node_value(pq, src, active_size, real_len, logical_len, alpha)
+                        : pq[src];
+                FracExt f0_hi =
+                    virtual_mode
+                        ? virtual_node_value(
+                              pq, src + fold_half, active_size, real_len, logical_len, alpha
+                          )
+                        : pq[src + fold_half];
+                FracExt f1_lo =
+                    virtual_mode
+                        ? virtual_node_value(
+                              pq, poly_stride + src, active_size, real_len, logical_len, alpha
+                          )
+                        : pq[poly_stride + src];
+                FracExt f1_hi = virtual_mode ? virtual_node_value(
+                                                   pq,
+                                                   poly_stride + src + fold_half,
+                                                   active_size,
+                                                   real_len,
+                                                   logical_len,
+                                                   alpha
+                                               )
+                                             : pq[poly_stride + src + fold_half];
                 p0 = f0_lo.p + r_prev * (f0_hi.p - f0_lo.p);
                 q0 = f0_lo.q + r_prev * (f0_hi.q - f0_lo.q);
                 p1 = f1_lo.p + r_prev * (f1_hi.p - f1_lo.p);
                 q1 = f1_lo.q + r_prev * (f1_hi.q - f1_lo.q);
             } else {
                 // Buffer already folded: read directly.
-                FracExt f0 = virtual_mode
-                    ? virtual_node_value(pq, src, active_size, real_len, logical_len, alpha)
-                    : pq[src];
-                FracExt f1 = virtual_mode
-                    ? virtual_node_value(pq, poly_stride + src, active_size, real_len, logical_len, alpha)
-                    : pq[poly_stride + src];
-                p0 = f0.p; q0 = f0.q;
-                p1 = f1.p; q1 = f1.q;
+                FracExt f0 =
+                    virtual_mode
+                        ? virtual_node_value(pq, src, active_size, real_len, logical_len, alpha)
+                        : pq[src];
+                FracExt f1 =
+                    virtual_mode
+                        ? virtual_node_value(
+                              pq, poly_stride + src, active_size, real_len, logical_len, alpha
+                          )
+                        : pq[poly_stride + src];
+                p0 = f0.p;
+                q0 = f0.q;
+                p1 = f1.p;
+                q1 = f1.q;
             }
             uint32_t sh_idx = bi * sh_stride + beta;
             FpExt wt = sh_weight[bi];
@@ -884,8 +945,7 @@ __global__ void precompute_m_build_partial_kernel(
         // Phase 3: Accumulate with 2 muls per iteration (weight already folded in).
         for (uint32_t bi = 0; bi < batch; ++bi) {
             uint32_t row = bi * sh_stride;
-            acc += sh_left0[row + u] * sh_right1[row + v]
-                 + sh_left1[row + u] * sh_right0[row + v];
+            acc += sh_left0[row + u] * sh_right1[row + v] + sh_left1[row + u] * sh_right0[row + v];
         }
 
         __syncthreads();
@@ -913,7 +973,7 @@ inline void launch_precompute_m_build_partial_kernel(
 ) {
     constexpr uint32_t m = 1u << W;
     dim3 block(m, m);
-    constexpr uint32_t sh_stride = m + 1;  // +1 padding to match kernel
+    constexpr uint32_t sh_stride = m + 1; // +1 padding to match kernel
     size_t shmem_bytes =
         (4 * sh_stride * PRECOMPUTE_M_TAIL_BATCH + PRECOMPUTE_M_TAIL_BATCH) * sizeof(FpExt);
     precompute_m_build_partial_kernel<inline_fold, W><<<grid, block, shmem_bytes, stream>>>(
@@ -951,8 +1011,20 @@ inline int launch_precompute_m_build_partial_dispatch(
     cudaStream_t stream
 ) {
     using LauncherFn = void (*)(
-        dim3, const FracExt *, uint32_t, uint32_t, uint32_t, FpExt, FpExt, FpExt,
-        const FpExt *, const FpExt *, uint32_t, uint32_t, FpExt *, cudaStream_t
+        dim3,
+        const FracExt *,
+        uint32_t,
+        uint32_t,
+        uint32_t,
+        FpExt,
+        FpExt,
+        FpExt,
+        const FpExt *,
+        const FpExt *,
+        uint32_t,
+        uint32_t,
+        FpExt *,
+        cudaStream_t
     );
     static constexpr LauncherFn launchers[] = {
         &launch_precompute_m_build_partial_kernel<inline_fold, 1>,
@@ -1063,12 +1135,14 @@ __global__ void precompute_m_eval_round_kernel(
 
     {
         FpExt reduced = sumcheck::block_reduce_sum(local_s1, shared);
-        if (threadIdx.x == 0) out[0] = reduced;
+        if (threadIdx.x == 0)
+            out[0] = reduced;
     }
     __syncthreads();
     {
         FpExt reduced = sumcheck::block_reduce_sum(local_s2, shared);
-        if (threadIdx.x == 0) out[1] = reduced;
+        if (threadIdx.x == 0)
+            out[1] = reduced;
     }
 }
 
@@ -1102,11 +1176,13 @@ __global__ void multifold_kernel(
     for (uint32_t beta = 0; beta < beta_size; ++beta) {
         uint32_t idx = beta * tail_size + out_idx;
         FracExt v0 = virtual_mode
-            ? virtual_node_value(src, idx, active_size, real_len, logical_len, alpha)
-            : src[idx];
+                         ? virtual_node_value(src, idx, active_size, real_len, logical_len, alpha)
+                         : src[idx];
         FracExt v1 = virtual_mode
-            ? virtual_node_value(src, poly_stride + idx, active_size, real_len, logical_len, alpha)
-            : src_1[idx];
+                         ? virtual_node_value(
+                               src, poly_stride + idx, active_size, real_len, logical_len, alpha
+                           )
+                         : src_1[idx];
         FpExt eq_r = eq_r_window[beta];
         acc0_p += eq_r * v0.p;
         acc0_q += eq_r * v0.q;
@@ -1160,30 +1236,35 @@ __global__ void frac_vector_scalar_multiply_kernel(
 //   Savings:   2 reads + 1 write = ~33% reduction in global memory traffic.
 __global__ void frac_build_tree_two_layers_kernel(
     FracExt *__restrict__ layer,
-    uint32_t half_i1,   // = N >> (i+2), where i is the first of the two layers
+    uint32_t half_i1, // = N >> (i+2), where i is the first of the two layers
     uint32_t real_len,
     uint32_t logical_len,
     FpExt alpha
 ) {
     uint32_t j = blockIdx.x * blockDim.x + threadIdx.x;
-    if (j >= half_i1) return;
+    if (j >= half_i1)
+        return;
 
-    uint32_t half_i = half_i1 << 1;   // = N >> (i+1)
+    uint32_t half_i = half_i1 << 1; // = N >> (i+1)
     uint32_t layer_size = half_i1 << 2;
     bool virtual_mode = real_len < logical_len;
 
     FracExt A = virtual_mode
-        ? virtual_node_value(layer, j, layer_size, real_len, logical_len, alpha)
-        : layer[j];
-    FracExt B = virtual_mode
-        ? virtual_node_value(layer, j + half_i1, layer_size, real_len, logical_len, alpha)
-        : layer[j + half_i1];
-    FracExt C = virtual_mode
-        ? virtual_node_value(layer, j + half_i, layer_size, real_len, logical_len, alpha)
-        : layer[j + half_i];
+                    ? virtual_node_value(layer, j, layer_size, real_len, logical_len, alpha)
+                    : layer[j];
+    FracExt B =
+        virtual_mode
+            ? virtual_node_value(layer, j + half_i1, layer_size, real_len, logical_len, alpha)
+            : layer[j + half_i1];
+    FracExt C =
+        virtual_mode
+            ? virtual_node_value(layer, j + half_i, layer_size, real_len, logical_len, alpha)
+            : layer[j + half_i];
     FracExt D = virtual_mode
-        ? virtual_node_value(layer, j + half_i + half_i1, layer_size, real_len, logical_len, alpha)
-        : layer[j + half_i + half_i1];
+                    ? virtual_node_value(
+                          layer, j + half_i + half_i1, layer_size, real_len, logical_len, alpha
+                      )
+                    : layer[j + half_i + half_i1];
 
     // Layer i: combine A with C and B with D (kept in registers)
     FracExt lhs = frac_add(A, C);
@@ -1195,8 +1276,8 @@ __global__ void frac_build_tree_two_layers_kernel(
         virtual_node_store(layer, j, half_i1, real_len, logical_len, result);
         virtual_node_store(layer, j + half_i1, half_i, real_len, logical_len, rhs);
     } else {
-        layer[j]         = result;
-        layer[j + half_i1] = rhs;   // Needed for revert of layer i+1
+        layer[j] = result;
+        layer[j + half_i1] = rhs; // Needed for revert of layer i+1
     }
     // layer[j + half_i] = C  (unchanged, needed for revert of layer i)
     // layer[j + half_i + half_i1] = D  (unchanged, needed for revert of layer i)
@@ -1215,13 +1296,8 @@ int launch_frac_build_tree_layer(
     cudaStream_t stream
 ) {
     auto [grid, block] = kernel_launch_params(half);
-    frac_build_tree_layer_kernel<revert, apply_alpha><<<grid, block, 0, stream>>>(
-        layer,
-        (uint32_t)half,
-        real_len,
-        logical_len,
-        alpha
-    );
+    frac_build_tree_layer_kernel<revert, apply_alpha>
+        <<<grid, block, 0, stream>>>(layer, (uint32_t)half, real_len, logical_len, alpha);
     return CHECK_KERNEL();
 }
 
@@ -1265,17 +1341,14 @@ extern "C" int _frac_build_tree_two_layers(
     FpExt alpha,
     cudaStream_t stream
 ) {
-    if (half_i1 == 0) return 0;
+    if (half_i1 == 0)
+        return 0;
     // Use 256 threads/block (not 1024) to give the compiler more register headroom.
     // frac_build_tree_two_layers_kernel does 4 FracExt loads + 3 frac_add ops,
     // which has higher register pressure than the single-layer build kernel.
     auto [grid, block] = kernel_launch_params(half_i1, 256);
     frac_build_tree_two_layers_kernel<<<grid, block, 0, stream>>>(
-        layer,
-        (uint32_t)half_i1,
-        (uint32_t)real_len,
-        (uint32_t)logical_len,
-        alpha
+        layer, (uint32_t)half_i1, (uint32_t)real_len, (uint32_t)logical_len, alpha
     );
     return CHECK_KERNEL();
 }
@@ -1305,12 +1378,11 @@ inline std::pair<dim3, dim3> frac_compute_round_launch_params(uint32_t num_x) {
     // For small workloads, we reduce threads/block to increase block count.
     constexpr uint32_t ROUND_COMPUTE_BLOCKS_PER_SM_TARGET = 2;
     constexpr uint32_t ROUND_COMPUTE_FALLBACK_BLOCKS_TARGET = 228;
-    uint32_t min_blocks_target =
-        min_blocks_target_for_device(
-            ROUND_COMPUTE_BLOCKS_PER_SM_TARGET, ROUND_COMPUTE_FALLBACK_BLOCKS_TARGET
-        );
+    uint32_t min_blocks_target = min_blocks_target_for_device(
+        ROUND_COMPUTE_BLOCKS_PER_SM_TARGET, ROUND_COMPUTE_FALLBACK_BLOCKS_TARGET
+    );
     constexpr uint32_t DEFAULT_BLOCK_SIZE = 256;
-    constexpr uint32_t MIN_BLOCK_SIZE = 64;      // Minimum for occupancy
+    constexpr uint32_t MIN_BLOCK_SIZE = 64; // Minimum for occupancy
 
     uint32_t block_size = DEFAULT_BLOCK_SIZE;
     uint32_t blocks_needed = (elements + block_size - 1) / block_size;
@@ -1333,7 +1405,12 @@ extern "C" uint32_t _frac_compute_round_temp_buffer_size(uint32_t num_x) {
     return grid.x * GKR_SP_DEG;
 }
 
-inline int final_reduce_block_sums(FpExt *tmp_block_sums, FpExt *out, uint32_t num_blocks, cudaStream_t stream) {
+inline int final_reduce_block_sums(
+    FpExt *tmp_block_sums,
+    FpExt *out,
+    uint32_t num_blocks,
+    cudaStream_t stream
+) {
     auto [unused_grid, reduce_block] = kernel_launch_params(num_blocks);
     (void)unused_grid;
     unsigned int reduce_warps = div_ceil(reduce_block.x, WARP_SIZE);
@@ -1350,7 +1427,7 @@ extern "C" int _frac_compute_round(
     size_t num_x,
     size_t eq_low_cap,
     FpExt lambda,
-    FpExt *out,           // Output: [d=2] final results
+    FpExt *out,            // Output: [d=2] final results
     FpExt *tmp_block_sums, // Temporary buffer: [gridDim.x * d]
     cudaStream_t stream
 ) {
@@ -1382,15 +1459,15 @@ extern "C" int _frac_compute_round(
 extern "C" int _frac_compute_round_and_revert(
     const FpExt *eq_xi_low,
     const FpExt *eq_xi_high,
-    FracExt *layer,           // Tree layer buffer (modified in-place for revert)
+    FracExt *layer, // Tree layer buffer (modified in-place for revert)
     size_t num_x,
     size_t real_len,
     size_t logical_len,
     size_t eq_low_cap,
     FpExt lambda,
     FpExt alpha,
-    FpExt *out,               // Output: [d=2] final results
-    FpExt *tmp_block_sums,     // Temporary buffer: [gridDim.x * d]
+    FpExt *out,            // Output: [d=2] final results
+    FpExt *tmp_block_sums, // Temporary buffer: [gridDim.x * d]
     cudaStream_t stream
 ) {
     assert(num_x > 1);
@@ -1427,15 +1504,15 @@ extern "C" int _frac_compute_round_and_fold(
     const FpExt *eq_xi_high,
     const FracExt *src_pq_buffer,
     FracExt *dst_pq_buffer,
-    size_t src_pq_size,           // Pre-fold size in FracExt
+    size_t src_pq_size, // Pre-fold size in FracExt
     size_t real_len,
     size_t logical_len,
     size_t eq_low_cap,
     FpExt lambda,
     FpExt r_prev,
     FpExt alpha,
-    FpExt *out,                   // Output: [d=2] final results
-    FpExt *tmp_block_sums,         // Temporary buffer: [gridDim.x * d]
+    FpExt *out,            // Output: [d=2] final results
+    FpExt *tmp_block_sums, // Temporary buffer: [gridDim.x * d]
     cudaStream_t stream
 ) {
     assert(src_pq_size > 2);
@@ -1476,8 +1553,8 @@ extern "C" int _frac_compute_round_and_fold(
 extern "C" int _frac_compute_round_and_fold_inplace(
     const FpExt *eq_xi_low,
     const FpExt *eq_xi_high,
-    FracExt *pq_buffer,           // In-place: reads src_pq_size, writes pq_size
-    size_t src_pq_size,           // Pre-fold size in FracExt
+    FracExt *pq_buffer, // In-place: reads src_pq_size, writes pq_size
+    size_t src_pq_size, // Pre-fold size in FracExt
     size_t real_len,
     size_t logical_len,
     size_t dst_real_len,
@@ -1486,8 +1563,8 @@ extern "C" int _frac_compute_round_and_fold_inplace(
     FpExt lambda,
     FpExt r_prev,
     FpExt alpha,
-    FpExt *out,                   // Output: [d=2] final results
-    FpExt *tmp_block_sums,         // Temporary buffer: [gridDim.x * d]
+    FpExt *out,            // Output: [d=2] final results
+    FpExt *tmp_block_sums, // Temporary buffer: [gridDim.x * d]
     cudaStream_t stream
 ) {
     assert(src_pq_size > 2);
@@ -1527,12 +1604,12 @@ extern "C" int _frac_precompute_m_build(
     const FracExt *pq,
     size_t real_len,
     size_t logical_len,
-    size_t rem_n,             // folded rem_n
+    size_t rem_n, // folded rem_n
     size_t w,
     FpExt lambda,
-    FpExt r_prev,             // challenge for the inline fold (only used when inline_fold=true)
+    FpExt r_prev, // challenge for the inline fold (only used when inline_fold=true)
     FpExt alpha,
-    bool inline_fold,         // true: pq is unfolded (rem_n+1 vars), false: pq is already folded
+    bool inline_fold, // true: pq is unfolded (rem_n+1 vars), false: pq is already folded
     const FpExt *eq_tail_low,
     const FpExt *eq_tail_high,
     size_t eq_tail_low_cap,
@@ -1607,10 +1684,7 @@ extern "C" int _frac_precompute_m_build(
     dim3 reduce_block(128);
     dim3 reduce_grid(div_ceil((uint32_t)total_entries, reduce_block.x));
     precompute_m_reduce_partials_kernel<<<reduce_grid, reduce_block, 0, stream>>>(
-        partial_out,
-        num_blocks,
-        (uint32_t)total_entries,
-        m_total
+        partial_out, num_blocks, (uint32_t)total_entries, m_total
     );
     return CHECK_KERNEL();
 }
@@ -1630,12 +1704,7 @@ extern "C" int _frac_precompute_m_eval_round(
     dim3 block(256);
     size_t shmem_bytes = div_ceil(block.x, WARP_SIZE) * sizeof(FpExt);
     precompute_m_eval_round_kernel<<<1, block, shmem_bytes, stream>>>(
-        m_total,
-        (uint32_t)w,
-        (uint32_t)t,
-        eq_r_prefix,
-        eq_suffix,
-        out
+        m_total, (uint32_t)w, (uint32_t)t, eq_r_prefix, eq_suffix, out
     );
     return CHECK_KERNEL();
 }
@@ -1657,24 +1726,28 @@ extern "C" int _frac_multifold(
     size_t out_len = 1u << (rem_n - w);
     auto [grid, block] = kernel_launch_params(out_len, 256);
 
-#define DISPATCH_MULTIFOLD(W) \
-    multifold_kernel<W><<<grid, block, 0, stream>>>( \
-        src, \
-        dst, \
-        (uint32_t)out_len, \
-        (uint32_t)real_len, \
-        (uint32_t)logical_len, \
-        alpha, \
-        eq_r_window \
-    ); \
+#define DISPATCH_MULTIFOLD(W)                                                                      \
+    multifold_kernel<W><<<grid, block, 0, stream>>>(                                               \
+        src, dst, (uint32_t)out_len, (uint32_t)real_len, (uint32_t)logical_len, alpha, eq_r_window \
+    );                                                                                             \
     return CHECK_KERNEL();
 
     switch (w) {
-        case 2: { DISPATCH_MULTIFOLD(2) }
-        case 3: { DISPATCH_MULTIFOLD(3) }
-        case 4: { DISPATCH_MULTIFOLD(4) }
-        case 5: { DISPATCH_MULTIFOLD(5) }
-        default: assert(false && "unsupported w for multifold"); return -1;
+    case 2: {
+        DISPATCH_MULTIFOLD(2)
+    }
+    case 3: {
+        DISPATCH_MULTIFOLD(3)
+    }
+    case 4: {
+        DISPATCH_MULTIFOLD(4)
+    }
+    case 5: {
+        DISPATCH_MULTIFOLD(5)
+    }
+    default:
+        assert(false && "unsupported w for multifold");
+        return -1;
     }
 #undef DISPATCH_MULTIFOLD
 }
@@ -1695,13 +1768,7 @@ extern "C" int _frac_fold_fpext_columns(
     uint32_t quarter = size >> 2;
     auto [grid, block] = kernel_launch_params(quarter);
     fold_ef_columns_kernel<<<grid, block, 0, stream>>>(
-        src,
-        dst,
-        (uint32_t)size,
-        (uint32_t)real_len,
-        (uint32_t)logical_len,
-        r,
-        alpha
+        src, dst, (uint32_t)size, (uint32_t)real_len, (uint32_t)logical_len, r, alpha
     );
     return CHECK_KERNEL();
 }
@@ -1712,13 +1779,18 @@ extern "C" int _frac_add_alpha(FracExt *data, size_t len, FpExt alpha, cudaStrea
     return CHECK_KERNEL();
 }
 
-extern "C" int _frac_vector_scalar_multiply_ext_fp(FracExt *frac_vec, Fp scalar, uint32_t length, cudaStream_t stream) {
+extern "C" int _frac_vector_scalar_multiply_ext_fp(
+    FracExt *frac_vec,
+    Fp scalar,
+    uint32_t length,
+    cudaStream_t stream
+) {
     auto [grid, block] = kernel_launch_params(length);
-    frac_vector_scalar_multiply_kernel<Fp, FpExt>
-        <<<grid, block, 0, stream>>>(reinterpret_cast<std::pair<FpExt, FpExt> *>(frac_vec), scalar, length);
+    frac_vector_scalar_multiply_kernel<Fp, FpExt><<<grid, block, 0, stream>>>(
+        reinterpret_cast<std::pair<FpExt, FpExt> *>(frac_vec), scalar, length
+    );
     return CHECK_KERNEL();
 }
-
 
 // ============================================================================
 // Fused bit-reversal + K=2 GKR tree-build
@@ -1727,10 +1799,7 @@ extern "C" int _frac_vector_scalar_multiply_ext_fp(FracExt *frac_vec, Fp scalar,
 // bit_rev() and index_t redeclared from supra/include/ntt/{ntt.cuh,parameters.cuh}
 // because the supra include path is not on the cuda-backend build search path.
 typedef unsigned int index_t;
-template<typename T>
-__device__ __forceinline__
-T bit_rev(T i, unsigned int nbits)
-{
+template <typename T> __device__ __forceinline__ T bit_rev(T i, unsigned int nbits) {
     return __brev(i) >> (8 * sizeof(unsigned int) - nbits);
 }
 
@@ -1757,16 +1826,17 @@ T bit_rev(T i, unsigned int nbits)
 // benchmarking: 2x faster than bsize=32 in isolation (1525 vs 754 GB/s at lg=24
 // on RTX 5090). It requires 64KB dynamic shmem per block, so cudaFuncSetAttribute
 // is used in the launcher, paid once on the first call.
-__global__
-void bit_rev_frac_build_k2_kernel(
-    FracExt* inout, uint32_t real_len, uint32_t lg_domain_size, FpExt alpha)
-{
+__global__ void bit_rev_frac_build_k2_kernel(
+    FracExt *inout,
+    uint32_t real_len,
+    uint32_t lg_domain_size,
+    FpExt alpha
+) {
     constexpr uint32_t Z_COUNT = 8;
     constexpr uint32_t LG_Z_COUNT = 3;
 
     extern __shared__ unsigned char xchg_raw[];
-    FracExt (*xchg)[Z_COUNT][Z_COUNT] =
-        reinterpret_cast<FracExt (*)[Z_COUNT][Z_COUNT]>(xchg_raw);
+    FracExt(*xchg)[Z_COUNT][Z_COUNT] = reinterpret_cast<FracExt(*)[Z_COUNT][Z_COUNT]>(xchg_raw);
 
     uint32_t gid = threadIdx.x / Z_COUNT;
     uint32_t idx = threadIdx.x % Z_COUNT;
@@ -1781,10 +1851,10 @@ void bit_rev_frac_build_k2_kernel(
     bool virtual_mode = real_len < domain_size;
     FracExt zero_frac = FracExt::zero();
 
-    #pragma unroll 1
+#pragma unroll 1
     do {
         index_t group_idx = tid >> LG_Z_COUNT;
-        index_t group_rev = bit_rev(group_idx, lg_domain_size - 2*LG_Z_COUNT);
+        index_t group_rev = bit_rev(group_idx, lg_domain_size - 2 * LG_Z_COUNT);
 
         if (group_idx > group_rev)
             continue;
@@ -1794,7 +1864,7 @@ void bit_rev_frac_build_k2_kernel(
 
         FracExt regs[Z_COUNT];
 
-        #pragma unroll
+#pragma unroll
         for (uint32_t i = 0; i < Z_COUNT; i++) {
             index_t src_idx = i * step + base_idx;
             FracExt val = src_idx < real_len ? inout[src_idx] : zero_frac;
@@ -1809,18 +1879,18 @@ void bit_rev_frac_build_k2_kernel(
 
         // Apply alpha + tree layers 0 and 1 to transposed tile, then write to base_rev
         {
-            FracExt* row = xchg[gid][rev];
-            #pragma unroll
+            FracExt *row = xchg[gid][rev];
+#pragma unroll
             for (uint32_t i = 0; i < Z_COUNT; i++)
                 row[i].q += alpha;
-            #pragma unroll
-            for (uint32_t i = 0; i < 4; i++)  // tree layer 0: pairs (0,4),(1,5),(2,6),(3,7)
+#pragma unroll
+            for (uint32_t i = 0; i < 4; i++) // tree layer 0: pairs (0,4),(1,5),(2,6),(3,7)
                 frac_add_inplace(row[i], row[i + 4]);
-            #pragma unroll
-            for (uint32_t i = 0; i < 2; i++)  // tree layer 1: pairs (0,2),(1,3)
+#pragma unroll
+            for (uint32_t i = 0; i < 2; i++) // tree layer 1: pairs (0,2),(1,3)
                 frac_add_inplace(row[i], row[i + 2]);
         }
-        #pragma unroll
+#pragma unroll
         for (uint32_t i = 0; i < Z_COUNT; i++) {
             index_t out_idx = i * step + base_rev;
             if (virtual_mode) {
@@ -1845,7 +1915,7 @@ void bit_rev_frac_build_k2_kernel(
 
         __syncwarp(subgroup_mask);
 
-        #pragma unroll
+#pragma unroll
         for (uint32_t i = 0; i < Z_COUNT; i++)
             xchg[gid][i][rev] = regs[i];
 
@@ -1853,18 +1923,18 @@ void bit_rev_frac_build_k2_kernel(
 
         // Apply alpha + tree layers 0 and 1 to transposed tile, then write to base_idx
         {
-            FracExt* row = xchg[gid][rev];
-            #pragma unroll
+            FracExt *row = xchg[gid][rev];
+#pragma unroll
             for (uint32_t i = 0; i < Z_COUNT; i++)
                 row[i].q += alpha;
-            #pragma unroll
+#pragma unroll
             for (uint32_t i = 0; i < 4; i++)
                 frac_add_inplace(row[i], row[i + 4]);
-            #pragma unroll
+#pragma unroll
             for (uint32_t i = 0; i < 2; i++)
                 frac_add_inplace(row[i], row[i + 2]);
         }
-        #pragma unroll
+#pragma unroll
         for (uint32_t i = 0; i < Z_COUNT; i++) {
             index_t out_idx = i * step + base_idx;
             if (virtual_mode) {
@@ -1884,7 +1954,7 @@ void bit_rev_frac_build_k2_kernel(
             }
         }
 
-    } while ((tid += blockDim.x*gridDim.x) < step);
+    } while ((tid += blockDim.x * gridDim.x) < step);
     // Note: the original bit_rev_permutation_z guards this with "Z_COUNT <= WARP_SIZE &&"
     // to prevent register spills when Z_COUNT > WARP_SIZE. Z_COUNT=8 is always <= 32.
 }
@@ -1893,23 +1963,28 @@ void bit_rev_frac_build_k2_kernel(
 // Requires domain_size >= 256 (uses Z-tile shmem kernel).
 // Applies alpha to denominators and fuses tree layers 0 and 1 in shmem.
 extern "C" int _bit_rev_frac_ext_build_k2(
-    FracExt* inout, size_t real_len, uint32_t lg_domain_size, FpExt alpha, cudaStream_t stream)
-{
+    FracExt *inout,
+    size_t real_len,
+    uint32_t lg_domain_size,
+    FpExt alpha,
+    cudaStream_t stream
+) {
     constexpr uint32_t Z_COUNT = 8;
     constexpr uint32_t bsize = 256;
-    constexpr size_t shmem_bytes = (size_t)bsize * Z_COUNT * sizeof(FracExt);  // 64 KB
+    constexpr size_t shmem_bytes = (size_t)bsize * Z_COUNT * sizeof(FracExt); // 64 KB
     // Raise the per-block dynamic shmem limit once (static → paid on first call only).
     static const cudaError_t shmem_err = cudaFuncSetAttribute(
-        bit_rev_frac_build_k2_kernel,
-        cudaFuncAttributeMaxDynamicSharedMemorySize,
-        (int)shmem_bytes);
-    if (shmem_err != cudaSuccess) return shmem_err;
+        bit_rev_frac_build_k2_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)shmem_bytes
+    );
+    if (shmem_err != cudaSuccess)
+        return shmem_err;
     size_t domain_size = (size_t)1 << lg_domain_size;
     if (domain_size < (size_t)(bsize * Z_COUNT))
         return cudaErrorInvalidValue;
     uint32_t grid_x = (uint32_t)(domain_size / Z_COUNT / bsize);
     bit_rev_frac_build_k2_kernel<<<dim3(grid_x), bsize, shmem_bytes, stream>>>(
-        inout, (uint32_t)real_len, lg_domain_size, alpha);
+        inout, (uint32_t)real_len, lg_domain_size, alpha
+    );
     return CHECK_KERNEL();
 }
 

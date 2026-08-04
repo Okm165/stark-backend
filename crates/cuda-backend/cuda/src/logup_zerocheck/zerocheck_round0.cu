@@ -58,14 +58,18 @@ __device__ __inline__ void acc_constraints(
 
         // Evaluate x operand for all cosets
         Fp x_vals[NUM_COSETS];
-        ntt_eval_dag_entry<NUM_COSETS, NEEDS_SHMEM>(x_vals, header.x, eval_ctx, is_first, is_last, x_int);
+        ntt_eval_dag_entry<NUM_COSETS, NEEDS_SHMEM>(
+            x_vals, header.x, eval_ctx, is_first, is_last, x_int
+        );
 
         switch (header.op) {
         case OP_ADD: {
             // Decode y only for binary ops
             SourceInfo y_src = decode_y(rule);
             Fp y_vals[NUM_COSETS];
-            ntt_eval_dag_entry<NUM_COSETS, NEEDS_SHMEM>(y_vals, y_src, eval_ctx, is_first, is_last, x_int);
+            ntt_eval_dag_entry<NUM_COSETS, NEEDS_SHMEM>(
+                y_vals, y_src, eval_ctx, is_first, is_last, x_int
+            );
 #pragma unroll
             for (uint32_t c = 0; c < NUM_COSETS; c++) {
                 x_vals[c] += y_vals[c];
@@ -75,7 +79,9 @@ __device__ __inline__ void acc_constraints(
         case OP_SUB: {
             SourceInfo y_src = decode_y(rule);
             Fp y_vals[NUM_COSETS];
-            ntt_eval_dag_entry<NUM_COSETS, NEEDS_SHMEM>(y_vals, y_src, eval_ctx, is_first, is_last, x_int);
+            ntt_eval_dag_entry<NUM_COSETS, NEEDS_SHMEM>(
+                y_vals, y_src, eval_ctx, is_first, is_last, x_int
+            );
 #pragma unroll
             for (uint32_t c = 0; c < NUM_COSETS; c++) {
                 x_vals[c] -= y_vals[c];
@@ -85,7 +91,9 @@ __device__ __inline__ void acc_constraints(
         case OP_MUL: {
             SourceInfo y_src = decode_y(rule);
             Fp y_vals[NUM_COSETS];
-            ntt_eval_dag_entry<NUM_COSETS, NEEDS_SHMEM>(y_vals, y_src, eval_ctx, is_first, is_last, x_int);
+            ntt_eval_dag_entry<NUM_COSETS, NEEDS_SHMEM>(
+                y_vals, y_src, eval_ctx, is_first, is_last, x_int
+            );
 #pragma unroll
             for (uint32_t c = 0; c < NUM_COSETS; c++) {
                 x_vals[c] *= y_vals[c];
@@ -586,9 +594,10 @@ int launch_zerocheck_ntt_evaluate_constraints(
     auto [reduce_grid, reduce_block] = kernel_launch_params(num_blocks);
     unsigned int reduce_warps = div_ceil(reduce_block.x, WARP_SIZE);
     size_t reduce_shmem = std::max(1u, reduce_warps) * sizeof(FpExt);
-    sumcheck::final_reduce_block_sums<<<NUM_COSETS * skip_domain, reduce_block, reduce_shmem, stream>>>(
-        tmp_sums_buffer, output, num_blocks
-    );
+    sumcheck::
+        final_reduce_block_sums<<<NUM_COSETS * skip_domain, reduce_block, reduce_shmem, stream>>>(
+            tmp_sums_buffer, output, num_blocks
+        );
 
     return CHECK_KERNEL();
 }
@@ -661,9 +670,10 @@ int launch_zerocheck_coset_parallel(
     auto [reduce_grid, reduce_block] = kernel_launch_params(num_blocks);
     unsigned int reduce_warps = div_ceil(reduce_block.x, WARP_SIZE);
     size_t reduce_shmem = std::max(1u, reduce_warps) * sizeof(FpExt);
-    sumcheck::final_reduce_block_sums<<<num_cosets * skip_domain, reduce_block, reduce_shmem, stream>>>(
-        tmp_sums_buffer, output, num_blocks
-    );
+    sumcheck::
+        final_reduce_block_sums<<<num_cosets * skip_domain, reduce_block, reduce_shmem, stream>>>(
+            tmp_sums_buffer, output, num_blocks
+        );
 
     return CHECK_KERNEL();
 }

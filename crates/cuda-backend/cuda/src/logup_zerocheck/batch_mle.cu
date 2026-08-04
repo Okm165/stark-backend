@@ -434,7 +434,9 @@ extern "C" int _logup_batch_eval_mle(
     dim3 block(threads_per_block);
     size_t shmem_bytes = div_ceil(block.x, WARP_SIZE) * sizeof(FpExt);
 
-    logup_batch_mle_kernel<<<grid, block, shmem_bytes, stream>>>(tmp_sums_buffer, block_ctxs, logup_ctxs);
+    logup_batch_mle_kernel<<<grid, block, shmem_bytes, stream>>>(
+        tmp_sums_buffer, block_ctxs, logup_ctxs
+    );
     int err = CHECK_KERNEL();
     if (err != 0)
         return err;

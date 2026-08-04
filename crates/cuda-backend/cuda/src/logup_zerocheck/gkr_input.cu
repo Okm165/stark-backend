@@ -102,8 +102,7 @@ __global__ void evaluate_interactions_gkr_kernel(
     uint32_t task_stride = ctx.task_stride;
 
     // d_intermediates may be null for AIRs with buffer_size == 0; avoid UB pointer arithmetic.
-    FpExt *intermediates_ptr =
-        ctx.d_intermediates ? ctx.d_intermediates + task_offset : nullptr;
+    FpExt *intermediates_ptr = ctx.d_intermediates ? ctx.d_intermediates + task_offset : nullptr;
 
     for (uint32_t j = 0; j < ctx.num_rows_per_tile; j++) {
         uint32_t row = task_offset + j * task_stride;
@@ -118,9 +117,15 @@ __global__ void evaluate_interactions_gkr_kernel(
                     RuleHeader header = decode_rule_header(rule);
                     if (header.op == OP_VAR) {
                         result = evaluate_dag_entry_gkr(
-                            header.x, row,
-                            ctx.d_preprocessed, ctx.d_main, ctx.d_public_values,
-                            ctx.d_challenges, intermediates_ptr, task_stride, ctx.height
+                            header.x,
+                            row,
+                            ctx.d_preprocessed,
+                            ctx.d_main,
+                            ctx.d_public_values,
+                            ctx.d_challenges,
+                            intermediates_ptr,
+                            task_stride,
+                            ctx.height
                         );
                     } else {
                         uint32_t z_index = decode_z_index(rule);
@@ -132,36 +137,57 @@ __global__ void evaluate_interactions_gkr_kernel(
                         RuleHeader header = decode_rule_header(rule);
 
                         FpExt x = evaluate_dag_entry_gkr(
-                            header.x, row,
-                            ctx.d_preprocessed, ctx.d_main, ctx.d_public_values,
-                            ctx.d_challenges, intermediates_ptr, task_stride, ctx.height
+                            header.x,
+                            row,
+                            ctx.d_preprocessed,
+                            ctx.d_main,
+                            ctx.d_public_values,
+                            ctx.d_challenges,
+                            intermediates_ptr,
+                            task_stride,
+                            ctx.height
                         );
                         FpExt y;
 
                         switch (header.op) {
                         case OP_ADD:
                             y = evaluate_dag_entry_gkr(
-                                decode_y(rule), row,
-                                ctx.d_preprocessed, ctx.d_main, ctx.d_public_values,
-                                ctx.d_challenges, intermediates_ptr, task_stride,
+                                decode_y(rule),
+                                row,
+                                ctx.d_preprocessed,
+                                ctx.d_main,
+                                ctx.d_public_values,
+                                ctx.d_challenges,
+                                intermediates_ptr,
+                                task_stride,
                                 ctx.height
                             );
                             result = x + y;
                             break;
                         case OP_SUB:
                             y = evaluate_dag_entry_gkr(
-                                decode_y(rule), row,
-                                ctx.d_preprocessed, ctx.d_main, ctx.d_public_values,
-                                ctx.d_challenges, intermediates_ptr, task_stride,
+                                decode_y(rule),
+                                row,
+                                ctx.d_preprocessed,
+                                ctx.d_main,
+                                ctx.d_public_values,
+                                ctx.d_challenges,
+                                intermediates_ptr,
+                                task_stride,
                                 ctx.height
                             );
                             result = x - y;
                             break;
                         case OP_MUL:
                             y = evaluate_dag_entry_gkr(
-                                decode_y(rule), row,
-                                ctx.d_preprocessed, ctx.d_main, ctx.d_public_values,
-                                ctx.d_challenges, intermediates_ptr, task_stride,
+                                decode_y(rule),
+                                row,
+                                ctx.d_preprocessed,
+                                ctx.d_main,
+                                ctx.d_public_values,
+                                ctx.d_challenges,
+                                intermediates_ptr,
+                                task_stride,
                                 ctx.height
                             );
                             x *= y;
