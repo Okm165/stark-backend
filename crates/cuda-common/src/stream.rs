@@ -7,9 +7,7 @@ use std::{
 
 use crate::error::{check, CudaError};
 
-#[cfg_attr(not(gpu_vendor_amd), link(name = "cudart"))]
-#[cfg_attr(gpu_vendor_amd, link(name = "amdhip64"))]
-extern "C" {
+crate::gpu_link! {
     #[cfg_attr(gpu_vendor_amd, link_name = "hipDeviceSynchronize")]
     fn cudaDeviceSynchronize() -> i32;
     #[cfg_attr(gpu_vendor_amd, link_name = "hipStreamCreateWithFlags")]
@@ -37,6 +35,14 @@ extern "C" {
 pub fn device_synchronize() -> Result<(), CudaError> {
     check(unsafe { cudaDeviceSynchronize() })
 }
+
+/// `cudaErrorNotReady` / `hipErrorNotReady` — the error code returned by
+/// event/stream query functions when work is still in progress.
+/// NVIDIA CUDA: 600, AMD HIP: 34.
+#[cfg(not(gpu_vendor_amd))]
+const NOT_READY_CODE: i32 = 600;
+#[cfg(gpu_vendor_amd)]
+const NOT_READY_CODE: i32 = 34;
 
 #[allow(non_camel_case_types)]
 pub type cudaStream_t = *mut c_void;
@@ -266,8 +272,8 @@ impl CudaEvent {
     pub fn status(&self) -> CudaEventStatus {
         let status = unsafe { cudaEventQuery(self.event) };
         match status {
-            0 => CudaEventStatus::Completed,  // CUDA_SUCCESS
-            600 => CudaEventStatus::NotReady, // CUDA_ERROR_NOT_READY
+            0 => CudaEventStatus::Completed,
+            NOT_READY_CODE => CudaEventStatus::NotReady,
             _ => CudaEventStatus::Error(CudaError::new(status)),
         }
     }
