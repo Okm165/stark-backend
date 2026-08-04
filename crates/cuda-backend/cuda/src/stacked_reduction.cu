@@ -88,9 +88,9 @@ __global__ void stacked_reduction_round0_block_sum_kernel(
     const FpExt *__restrict__ eq_r_ns, // pointer to EqEvalSegments
     const Fp *__restrict__ trace_ptr,
     const FpExt *__restrict__ lambda_pows, // pointer to lambda_pows at window start
-    FpExt *__restrict__ block_sums, // [gridDim.x * gridDim.y][NUM_G * skip_domain]
-    uint32_t height,                // trace height
-    uint32_t width,                 // trace width
+    FpExt *__restrict__ block_sums,        // [gridDim.x * gridDim.y][NUM_G * skip_domain]
+    uint32_t height,                       // trace height
+    uint32_t width,                        // trace width
     uint32_t l_skip,
     uint32_t skip_mask, // 2^l_skip - 1
     uint32_t num_x,     // 1 << n_lift
@@ -120,9 +120,9 @@ __global__ void stacked_reduction_round0_block_sum_kernel(
         FpExt coeff_eq = lambda_pows[2 * col_idx];      // for G0
         FpExt coeff_rot = lambda_pows[2 * col_idx + 1]; // for G1, G2
 
-        FpExt w0 = coeff_eq * eq_cube;      // weight for G0
-        FpExt w1 = coeff_rot * eq_cube;     // weight for G1
-        FpExt w2 = coeff_rot * k_rot_diff;  // weight for G2
+        FpExt w0 = coeff_eq * eq_cube;     // weight for G0
+        FpExt w1 = coeff_rot * eq_cube;    // weight for G1
+        FpExt w2 = coeff_rot * k_rot_diff; // weight for G2
 
         // Load trace value (identity coset only, no NTT needed)
         auto evals = trace_ptr + col_idx * height + (x_int << (l_skip - log_stride));
@@ -156,8 +156,7 @@ __global__ void stacked_reduction_round0_block_sum_kernel(
 
         // Output: 3 values per z_idx, stored contiguously
         uint32_t skip_domain = 1u << l_skip;
-        FpExt *out_ptr =
-            block_sums + (col_idx * gridDim.x + blockIdx.x) * (NUM_G * skip_domain);
+        FpExt *out_ptr = block_sums + (col_idx * gridDim.x + blockIdx.x) * (NUM_G * skip_domain);
         out_ptr[0 * skip_domain + z_idx] = g0;
         out_ptr[1 * skip_domain + z_idx] = g1;
         out_ptr[2 * skip_domain + z_idx] = g2;
@@ -421,7 +420,9 @@ extern "C" int _stacked_reduction_sumcheck_round0(
     uint32_t trace_height,
     uint32_t trace_width,
     uint32_t l_skip,
-    uint32_t num_x, cudaStream_t stream) {
+    uint32_t num_x,
+    cudaStream_t stream
+) {
     uint32_t skip_domain = 1u << l_skip;
     uint32_t stride = std::max(skip_domain / trace_height, 1u);
     auto [grid, block] = stacked_reduction_round0_launch_params(trace_height, trace_width, l_skip);
@@ -431,9 +432,16 @@ extern "C" int _stacked_reduction_sumcheck_round0(
     size_t shmem_sum_size = sizeof(FpExt) * (block.x + 1) * NUM_G;
 
     stacked_reduction_round0_block_sum_kernel<<<grid, block, shmem_sum_size, stream>>>(
-        eq_r_ns, trace_ptr, lambda_pows, block_sums,
-        trace_height, trace_width, l_skip,
-        skip_domain - 1, num_x, 31 - __builtin_clz(stride)
+        eq_r_ns,
+        trace_ptr,
+        lambda_pows,
+        block_sums,
+        trace_height,
+        trace_width,
+        l_skip,
+        skip_domain - 1,
+        num_x,
+        31 - __builtin_clz(stride)
     );
 
     int err = CHECK_KERNEL();
@@ -459,7 +467,9 @@ extern "C" int _stacked_reduction_fold_ple(
     const FpExt *inv_lagrange_denoms,
     uint32_t trace_height,
     uint32_t trace_width,
-    uint32_t l_skip, cudaStream_t stream) {
+    uint32_t l_skip,
+    cudaStream_t stream
+) {
     uint32_t skip_domain = 1u << l_skip;
     uint32_t new_height = std::max(trace_height, skip_domain) / skip_domain;
 
@@ -488,7 +498,9 @@ extern "C" int _initialize_k_rot_from_eq_segments(
     FpExt *k_rot_ns,
     FpExt k_rot_uni_0,
     FpExt k_rot_uni_1,
-    uint32_t max_n, cudaStream_t stream) {
+    uint32_t max_n,
+    cudaStream_t stream
+) {
     auto [grid, block] = kernel_launch_params(1 << max_n);
     grid.y = max_n + 1;
 
@@ -509,7 +521,9 @@ extern "C" int _stacked_reduction_sumcheck_mle_round(
     uint32_t q_height,
     uint32_t window_len,
     uint32_t num_y,
-    uint32_t sm_count, cudaStream_t stream) {
+    uint32_t sm_count,
+    cudaStream_t stream
+) {
     // Smaller block size for more eligible warps to hide latency
     auto [grid, block] = kernel_launch_params(num_y, 256);
     assert(sm_count);
@@ -553,7 +567,9 @@ extern "C" int _stacked_reduction_sumcheck_mle_round_degenerate(
     uint32_t q_height,
     uint32_t window_len,
     uint32_t l_skip,
-    uint32_t round, cudaStream_t stream) {
+    uint32_t round,
+    cudaStream_t stream
+) {
     auto shift_factor = l_skip + round;
     uint32_t raw_block = std::min(window_len, 256u);
     // Round to WARP_SIZE multiple: on AMD, __shfl_down from inactive lanes in a

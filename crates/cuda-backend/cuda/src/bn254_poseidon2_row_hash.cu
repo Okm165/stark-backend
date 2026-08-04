@@ -41,8 +41,9 @@ extern __device__ __constant__ Bn254Fr g_terminal_rc[4][3];
 
 // b32 Poseidon2 permutation impl (parameterized over WIDTH/HALF_F/ROUNDS_P).
 // Built on bn254_b32::bn254_add / bn254_sbox / bn254_mds_external /
-// bn254_mds_internal — all of which lower to IMAD.WIDE / IADD3.X chains via
-// inline PTX.
+// bn254_mds_internal — which compile to:
+//   NVIDIA: explicit PTX carry chains (add.cc, mad.hi.cc)
+//   AMD:    GCN v_add_co_u32 chains + v_mad_u64_u32 (compiler-generated)
 template <int WIDTH, int HALF_F, int ROUNDS_P>
 static __device__ void bn254_poseidon2_permute_impl_b32(
     Bn254Fr32 state[WIDTH],
@@ -97,7 +98,6 @@ static __device__ void bn254_poseidon2_permute_w2_b32(Bn254Fr32 state[2]) {
         (Bn254Fr32 *)g_terminal_rc_w2
     );
 }
-
 
 /// b32 mirror of bn254_row_hash. Uses bn254_b32::bn254_pack_base_2_31 and the
 /// b32 width-3 permutation. The 16-u32 sponge `buf` lives in shared memory
@@ -405,8 +405,9 @@ extern "C" int _bn254_poseidon2_compressing_row_hashes(
     block.y = block_y;
     auto height = query_stride << log_rows_per_query;
 
-    bn254_compressing_row_hashes_kernel_v3<512>
-        <<<grid, block, 0, stream>>>((Bn254Fr32 *)out, matrix, width, height, query_stride, log_rows_per_query);
+    bn254_compressing_row_hashes_kernel_v3<512><<<grid, block, 0, stream>>>(
+        (Bn254Fr32 *)out, matrix, width, height, query_stride, log_rows_per_query
+    );
     return CHECK_KERNEL();
 }
 

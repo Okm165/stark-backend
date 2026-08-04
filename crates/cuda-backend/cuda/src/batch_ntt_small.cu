@@ -115,7 +115,10 @@ __global__ void batch_ntt_kernel(
 
 template <bool intt, bool needs_shmem>
 int launch_batch_ntt_small(
-    Fp *buffer, size_t const l_skip, size_t const cnt_blocks, cudaStream_t stream
+    Fp *buffer,
+    size_t const l_skip,
+    size_t const cnt_blocks,
+    cudaStream_t stream
 ) {
     uint32_t const threads_per_block = 1024;
     uint32_t const threads_x = 1 << l_skip;

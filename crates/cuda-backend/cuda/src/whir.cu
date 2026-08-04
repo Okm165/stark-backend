@@ -165,11 +165,8 @@ __global__ void whir_fold_coeffs_and_moments_kernel(
     w_folded_moments[y] = one_minus_alpha * m0 + two_alpha_minus_one * m1;
 }
 
-__device__ __forceinline__ FpExt whir_pow_from_pows2_ext(
-    const FpExt *pows2,
-    uint32_t log_height,
-    uint32_t exponent
-) {
+__device__ __forceinline__ FpExt
+whir_pow_from_pows2_ext(const FpExt *pows2, uint32_t log_height, uint32_t exponent) {
     FpExt acc = FpExt(Fp(1));
     for (uint32_t bit = 0; bit < log_height; bit++) {
         if (exponent & (1u << bit)) {
@@ -179,11 +176,8 @@ __device__ __forceinline__ FpExt whir_pow_from_pows2_ext(
     return acc;
 }
 
-__device__ __forceinline__ Fp whir_pow_from_pows2_base(
-    const Fp *pows2,
-    uint32_t log_height,
-    uint32_t exponent
-) {
+__device__ __forceinline__ Fp
+whir_pow_from_pows2_base(const Fp *pows2, uint32_t log_height, uint32_t exponent) {
     Fp acc = Fp(1);
     for (uint32_t bit = 0; bit < log_height; bit++) {
         if (exponent & (1u << bit)) {
@@ -230,7 +224,9 @@ extern "C" int _whir_algebraic_batch_traces(
     const FpExt *mu_powers, // Len is sum of widths of all matrices
     size_t stacked_height,
     size_t num_packets,
-    uint32_t skip_domain, cudaStream_t stream) {
+    uint32_t skip_domain,
+    cudaStream_t stream
+) {
     auto [grid, block] = kernel_launch_params(stacked_height);
     whir_algebraic_batch_traces_kernel<<<grid, block, 0, stream>>>(
         output, packets, mu_powers, stacked_height, num_packets, skip_domain
@@ -252,7 +248,9 @@ extern "C" int _whir_sumcheck_coeff_moments_round(
     const FpExt *w_moments,
     FpExt *output,         // Output: [d=2] final results
     FpExt *tmp_block_sums, // Temporary buffer: [num_blocks * d]
-    const uint32_t height, cudaStream_t stream) {
+    const uint32_t height,
+    cudaStream_t stream
+) {
     auto [grid, block] = whir_sumcheck_coeff_moments_launch_params(height);
     unsigned int num_warps = (block.x + WARP_SIZE - 1) / WARP_SIZE;
     size_t shmem_bytes = std::max(1u, num_warps) * sizeof(FpExt);
@@ -281,7 +279,9 @@ extern "C" int _whir_fold_coeffs_and_moments(
     FpExt *f_folded_coeffs,
     FpExt *w_folded_moments,
     FpExt alpha,
-    uint32_t height, cudaStream_t stream) {
+    uint32_t height,
+    cudaStream_t stream
+) {
     auto [grid, block] = kernel_launch_params(height >> 1);
     whir_fold_coeffs_and_moments_kernel<<<grid, block, 0, stream>>>(
         f_coeffs, w_moments, f_folded_coeffs, w_folded_moments, alpha, height >> 1
@@ -296,7 +296,9 @@ extern "C" int _w_moments_accumulate(
     FpExt gamma,
     uint32_t num_queries,
     uint32_t log_height,
-    uint32_t height, cudaStream_t stream) {
+    uint32_t height,
+    cudaStream_t stream
+) {
     auto [grid, block] = kernel_launch_params(height, 256);
     w_moments_accumulate_kernel<<<grid, block, 0, stream>>>(
         w_moments, z0_pows2, z_pows2, gamma, num_queries, log_height, height

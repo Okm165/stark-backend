@@ -11,17 +11,19 @@
 
 // Must match the Rust DeviceSpongeState struct layout
 struct DeviceSpongeState {
-    Fp state[CELLS];      // WIDTH = 16
+    Fp state[CELLS]; // WIDTH = 16
     uint32_t absorb_idx;
     uint32_t sample_idx;
 };
 
-static_assert(sizeof(DeviceSpongeState) == CELLS * sizeof(Fp) + 2 * sizeof(uint32_t),
-              "DeviceSpongeState size mismatch with Rust");
+static_assert(
+    sizeof(DeviceSpongeState) == CELLS * sizeof(Fp) + 2 * sizeof(uint32_t),
+    "DeviceSpongeState size mismatch with Rust"
+);
 
 // Sponge operations matching DuplexSponge behavior
 
-__device__ void sponge_observe(DeviceSpongeState& sponge, Fp value) {
+__device__ void sponge_observe(DeviceSpongeState &sponge, Fp value) {
     sponge.state[sponge.absorb_idx] = value;
     sponge.absorb_idx += 1;
     if (sponge.absorb_idx == CELLS_RATE) {
@@ -31,7 +33,7 @@ __device__ void sponge_observe(DeviceSpongeState& sponge, Fp value) {
     }
 }
 
-__device__ Fp sponge_sample(DeviceSpongeState& sponge) {
+__device__ Fp sponge_sample(DeviceSpongeState &sponge) {
     if (sponge.absorb_idx != 0 || sponge.sample_idx == 0) {
         poseidon2::poseidon2_mix(sponge.state);
         sponge.absorb_idx = 0;
@@ -41,13 +43,13 @@ __device__ Fp sponge_sample(DeviceSpongeState& sponge) {
     return sponge.state[sponge.sample_idx];
 }
 
-__device__ uint32_t sponge_sample_bits(DeviceSpongeState& sponge, uint32_t bits) {
+__device__ uint32_t sponge_sample_bits(DeviceSpongeState &sponge, uint32_t bits) {
     Fp rand_f = sponge_sample(sponge);
     uint32_t rand_u32 = rand_f.asUInt32();
     return rand_u32 & ((1u << bits) - 1);
 }
 
-__device__ bool sponge_check_witness(DeviceSpongeState& sponge, uint32_t bits, Fp witness) {
+__device__ bool sponge_check_witness(DeviceSpongeState &sponge, uint32_t bits, Fp witness) {
     sponge_observe(sponge, witness);
     return sponge_sample_bits(sponge, bits) == 0;
 }
@@ -63,11 +65,11 @@ __device__ bool sponge_check_witness(DeviceSpongeState& sponge, uint32_t bits, F
  * @param max_witness Maximum witness value to try (usually F::ORDER - 1)
  */
 __global__ void grind_kernel(
-    const DeviceSpongeState* init_state,
+    const DeviceSpongeState *init_state,
     uint32_t bits,
     uint32_t min_witness,
     uint32_t max_witness,
-    uint32_t* result
+    uint32_t *result
 ) {
     uint32_t w = min_witness + blockIdx.x * blockDim.x + threadIdx.x;
     if (w > max_witness || *result != UINT32_MAX) {
@@ -89,13 +91,14 @@ __global__ void grind_kernel(
 // Launcher function callable from Rust
 
 extern "C" int _sponge_grind(
-    const DeviceSpongeState* init_state,
+    const DeviceSpongeState *init_state,
     uint32_t bits,
     uint32_t min_witness,
     uint32_t max_witness,
-    uint32_t* result,  // Output: device pointer where the found witness value will be written.
+    uint32_t *result, // Output: device pointer where the found witness value will be written.
     // Must be set to `UINT32_MAX` before this function call.
-    cudaStream_t stream) {
+    cudaStream_t stream
+) {
     if (bits >= 32 || (uint64_t{1} << bits) >= Fp::P) {
         return cudaErrorInvalidValue;
     }
