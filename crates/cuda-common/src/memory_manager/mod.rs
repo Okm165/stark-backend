@@ -201,30 +201,6 @@ pub unsafe fn d_free(ptr: *mut c_void) -> Result<(), MemoryError> {
     Ok(())
 }
 
-/// Release all physical pages currently in the free pool back to the device.
-///
-/// After this call, the pool's `active_pages` for freed regions are unmapped and
-/// their physical handles released, making the GPU memory available to other
-/// processes on the same device. Subsequent allocations will allocate fresh pages.
-///
-/// This is intended for use between proving phases when a process needs to
-/// relinquish GPU memory for other workloads (e.g., root proving on the same device).
-pub fn release_free_pages() {
-    let Some(manager) = MEMORY_MANAGER.get() else {
-        return;
-    };
-    let Ok(mut manager) = manager.lock() else {
-        return;
-    };
-    let released = manager.pool.release_free_pages();
-    if released > 0 {
-        tracing::info!(
-            "Released {} of GPU pool pages back to device",
-            ByteSize::b(released as u64),
-        );
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct MemTracker {
     current: usize,
