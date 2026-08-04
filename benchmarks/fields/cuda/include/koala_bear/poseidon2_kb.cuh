@@ -42,11 +42,9 @@ static __device__ __constant__ Kb TERMINAL_ROUND_CONSTANTS[64] = {
 
 // Round constants from Plonky3 KOALABEAR_RC16_INTERNAL (20 partial rounds)
 static __device__ __constant__ Kb INTERNAL_ROUND_CONSTANTS[20] = {
-    2102596038, 1533193853, 1436311464, 2012303432,
-    839997195,  1225781098, 2011967775, 575084315,
-    1309329169, 786393545,  995788880,  1702925345,
-    1444525226, 908073383,  1811535085, 1531002367,
-    1635653662, 1585100155, 867006515,  879151050
+    2102596038, 1533193853, 1436311464, 2012303432, 839997195,  1225781098, 2011967775,
+    575084315,  1309329169, 786393545,  995788880,  1702925345, 1444525226, 908073383,
+    1811535085, 1531002367, 1635653662, 1585100155, 867006515,  879151050
 };
 
 // Internal diagonal: [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/8, 1/2^24, -1/2^8, -1/8, -1/16, -1/2^24]
@@ -70,7 +68,6 @@ static __device__ __constant__ Kb internal_diag16[16] = {
     127         // -1/2^24
 };
 
-
 #define KB_CELLS 16
 #define KB_ROUNDS_FULL 8
 #define KB_ROUNDS_HALF_FULL (KB_ROUNDS_FULL / 2)
@@ -87,9 +84,7 @@ static __device__ void do_full_sboxes(Kb *cells) {
     }
 }
 
-static __device__ void do_partial_sboxes(Kb *cells) {
-    cells[0] = sbox_d3(cells[0]);
-}
+static __device__ void do_partial_sboxes(Kb *cells) { cells[0] = sbox_d3(cells[0]); }
 
 // Multiply a 4-element vector x by circ(2, 3, 1, 1)
 static __device__ void multiply_by_4x4_circulant(Kb *x) {
@@ -133,11 +128,15 @@ static __device__ void add_round_constants_full(const Kb *ROUND_CONSTANTS, Kb *c
     }
 }
 
-static __device__ void add_round_constants_partial(const Kb *PARTIAL_ROUND_CONSTANTS, Kb *cells, uint round) {
+static __device__ void add_round_constants_partial(
+    const Kb *PARTIAL_ROUND_CONSTANTS,
+    Kb *cells,
+    uint round
+) {
     cells[0] += PARTIAL_ROUND_CONSTANTS[round];
 }
 
-static __device__ __forceinline__ void internal_layer_mat_mul(Kb* cells, Kb sum) {
+static __device__ __forceinline__ void internal_layer_mat_mul(Kb *cells, Kb sum) {
     cells[1] += sum;
 #pragma unroll
     for (int i = 2; i < KB_CELLS; i++) {
