@@ -104,16 +104,7 @@ extern "C" {
         bits: u32,
         min_witness: u32,
         max_witness: u32,
-        witness_step: u32,
         result: *mut u32,
-        stream: cudaStream_t,
-    ) -> i32;
-
-    fn _bn254_verify_witness(
-        init_state: *const DeviceBn254SpongeState,
-        bits: u32,
-        witness: u32,
-        out_sample_bits: *mut u32,
         stream: cudaStream_t,
     ) -> i32;
 }
@@ -396,27 +387,6 @@ pub unsafe fn bn254_sponge_grind(
     max_witness: u32,
     device_ctx: &GpuDeviceCtx,
 ) -> Result<u32, crate::sponge::GrindError> {
-    bn254_sponge_grind_range(init_state, bits, 0, max_witness, 1, device_ctx)
-}
-
-/// Launch the BN254 sponge grinding kernel over an explicit [min_witness, max_witness] range
-/// with configurable witness step for interleaved distributed grinding.
-///
-/// `witness_step` controls search interleaving:
-///   - step=1: search all candidates (default single-GPU mode)
-///   - step=N: search every Nth candidate starting at min_witness e.g. step=2, min_witness=0 →
-///     checks {0, 2, 4, ...} step=2, min_witness=1 → checks {1, 3, 5, ...}
-///
-/// # Safety
-/// - `init_state` must point to valid device memory.
-pub unsafe fn bn254_sponge_grind_range(
-    init_state: *const DeviceBn254SpongeState,
-    bits: u32,
-    min_witness: u32,
-    max_witness: u32,
-    witness_step: u32,
-    device_ctx: &GpuDeviceCtx,
-) -> Result<u32, crate::sponge::GrindError> {
     use openvm_cuda_common::copy::{MemCopyD2H, MemCopyH2D};
 
     init_bn254_poseidon2_rc()?;
@@ -424,13 +394,12 @@ pub unsafe fn bn254_sponge_grind_range(
     let mut d_result: DeviceBuffer<u32> = DeviceBuffer::with_capacity_on(1, device_ctx);
     [u32::MAX].copy_to_on(&mut d_result, device_ctx)?;
 
-    for start in (min_witness..=max_witness).step_by(1 << bits) {
+    for start in (0..=max_witness).step_by(1 << bits) {
         CudaError::from_result(_bn254_sponge_grind(
             init_state,
             bits,
             start,
             max_witness,
-            witness_step,
             d_result.as_mut_ptr(),
             device_ctx.stream.as_raw(),
         ))?;
@@ -441,74 +410,4 @@ pub unsafe fn bn254_sponge_grind_range(
         }
     }
     Err(crate::sponge::GrindError::WitnessNotFound)
-}
-
-/// Thread-safe BN254 sponge grinding that creates its own GPU context.
-///
-/// This function can be safely called from any thread (including spawned threads).
-/// It copies the sponge state to a fresh device buffer on a new stream, runs the
-/// grinding kernel with the specified interleave parameters, and returns.
-///
-/// Used by the distributed racing logic in `grind_gpu` to run the local GPU kernel
-/// on a dedicated thread while the remote worker is queried in parallel.
-pub fn bn254_sponge_grind_on_new_stream(
-    sponge_state: &DeviceBn254SpongeState,
-    bits: u32,
-    min_witness: u32,
-    max_witness: u32,
-    witness_step: u32,
-) -> Result<u32, crate::sponge::GrindError> {
-    use openvm_cuda_common::{
-        common::get_device, copy::MemCopyH2D, d_buffer::DeviceBuffer, stream::GpuDeviceCtx,
-    };
-
-    let device_id = get_device().map_err(|_| crate::sponge::GrindError::KernelLaunchFailed)?;
-    let ctx = GpuDeviceCtx::for_device(device_id as u32)
-        .map_err(|_| crate::sponge::GrindError::KernelLaunchFailed)?;
-
-    let mut d_state: DeviceBuffer<DeviceBn254SpongeState> = DeviceBuffer::with_capacity_on(1, &ctx);
-    [sponge_state.clone()]
-        .copy_to_on(&mut d_state, &ctx)
-        .map_err(|_| crate::sponge::GrindError::KernelLaunchFailed)?;
-
-    unsafe {
-        bn254_sponge_grind_range(
-            d_state.as_ptr(),
-            bits,
-            min_witness,
-            max_witness,
-            witness_step,
-            &ctx,
-        )
-    }
-}
-
-/// Verify a single witness on GPU: returns sample_bits (0 means valid PoW).
-/// Used for diagnosing GPU/CPU sponge disagreement.
-pub unsafe fn bn254_verify_witness(
-    init_state: *const DeviceBn254SpongeState,
-    bits: u32,
-    witness: u32,
-    device_ctx: &GpuDeviceCtx,
-) -> Result<u32, CudaError> {
-    use openvm_cuda_common::copy::{MemCopyD2H, MemCopyH2D};
-
-    init_bn254_poseidon2_rc()?;
-    let mut d_result: DeviceBuffer<u32> = DeviceBuffer::with_capacity_on(1, device_ctx);
-    [u32::MAX]
-        .copy_to_on(&mut d_result, device_ctx)
-        .map_err(|_| CudaError::new(1))?;
-
-    CudaError::from_result(_bn254_verify_witness(
-        init_state,
-        bits,
-        witness,
-        d_result.as_mut_ptr(),
-        device_ctx.stream.as_raw(),
-    ))?;
-
-    let result = d_result
-        .to_host_on(device_ctx)
-        .map_err(|_| CudaError::new(1))?[0];
-    Ok(result)
 }
