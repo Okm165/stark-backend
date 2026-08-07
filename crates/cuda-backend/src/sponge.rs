@@ -37,7 +37,7 @@ pub(crate) fn validate_gpu_grind_bits(bits: usize) -> Result<(), GrindError> {
 /// This struct implements the same logic as `DuplexSponge` from openvm_stark_backend,
 /// but with public fields so we can sync state to/from GPU.
 #[repr(C)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DeviceSpongeState {
     /// Full Poseidon2 state (WIDTH = 16 elements)
     pub state: [F; WIDTH],

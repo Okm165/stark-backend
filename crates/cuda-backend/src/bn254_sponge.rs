@@ -44,7 +44,7 @@ type Digest = [Bn254Scalar; 1];
 /// };
 /// ```
 #[repr(C)]
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct DeviceBn254SpongeState {
     pub sponge_state: [[u64; 4]; 3], // 96 bytes
     pub absorb_idx: u32,             // 4 bytes
@@ -128,7 +128,7 @@ impl MultiFieldTranscriptGpu {
     }
 
     /// Build a `DeviceBn254SpongeState` from the current CPU transcript state.
-    fn snapshot_sponge_state(&self) -> DeviceBn254SpongeState {
+    pub fn snapshot_sponge_state(&self) -> DeviceBn254SpongeState {
         let mut ds = DeviceBn254SpongeState::default();
         for (i, &s) in self.inner.sponge_state().iter().enumerate() {
             ds.sponge_state[i] = bn254_scalar_to_raw(s);
@@ -206,10 +206,8 @@ impl GpuFiatShamirTranscript<BabyBearBn254Poseidon2Config> for MultiFieldTranscr
             return Ok(BabyBear::ZERO);
         }
 
-        // 1. Sync host state to device.
         self.sync_h2d(device_ctx)?;
 
-        // 2. Launch grinding kernel.
         let max_witness = BabyBear::ORDER_U32 - 1;
         let witness_u32 = unsafe {
             crate::cuda::bn254_merkle_tree::bn254_sponge_grind(
@@ -222,7 +220,6 @@ impl GpuFiatShamirTranscript<BabyBearBn254Poseidon2Config> for MultiFieldTranscr
 
         let witness = BabyBear::from_u32(witness_u32);
 
-        // 3. Validate witness on CPU (catches silent GPU miscompile on AMD)
         if !FiatShamirTranscript::<BabyBearBn254Poseidon2Config>::check_witness(
             &mut self.inner.clone(),
             bits,
@@ -231,7 +228,6 @@ impl GpuFiatShamirTranscript<BabyBearBn254Poseidon2Config> for MultiFieldTranscr
             return Err(GrindError::InvalidWitness);
         }
 
-        // 4. Update host state: observe witness + consume one sample.
         FiatShamirTranscript::<BabyBearBn254Poseidon2Config>::observe(&mut self.inner, witness);
         let _ = FiatShamirTranscript::<BabyBearBn254Poseidon2Config>::sample(&mut self.inner);
 
