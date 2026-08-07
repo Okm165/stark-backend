@@ -223,7 +223,7 @@ extern "C" int _poseidon2_compressing_row_hashes(
         return cudaErrorInvalidValue;
     }
     size_t block_y = size_t{1} << log_rows_per_query;
-    size_t threads_x = std::max<size_t>(1, size_t{512} / block_y);
+    size_t threads_x = std::max<size_t>(1, MAX_THREADS / block_y);
     auto [grid, block] = kernel_launch_params(query_stride, threads_x);
     block.y = block_y;
     size_t shared_stride = block.x * div_ceil(block.y, 2);
@@ -248,7 +248,7 @@ extern "C" int _poseidon2_compressing_row_hashes_ext(
         return cudaErrorInvalidValue;
     }
     size_t block_y = size_t{1} << log_rows_per_query;
-    size_t threads_x = std::max<size_t>(1, size_t{512} / block_y);
+    size_t threads_x = std::max<size_t>(1, MAX_THREADS / block_y);
     auto [grid, block] = kernel_launch_params(query_stride, threads_x);
     block.y = block_y;
     size_t shared_stride = block.x * div_ceil(block.y, 2);
