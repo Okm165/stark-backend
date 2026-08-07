@@ -15,6 +15,17 @@ static const size_t MAX_THREADS = 1024;
 #endif
 static const size_t WARP_SIZE = 32;
 
+// Unified launch attribute for register-heavy kernels (sumcheck, zerocheck, logup).
+// On AMD: allow compiler to use more VGPRs per wave, reducing spills.
+// On NVIDIA: limit occupancy to 2 blocks/SM, giving each block more registers.
+#if defined(__HIPCC__)
+#define GPU_REGISTER_HEAVY \
+    __attribute__((amdgpu_waves_per_eu(1, 4))) \
+    __attribute__((amdgpu_flat_work_group_size(64, 256)))
+#else
+#define GPU_REGISTER_HEAVY __launch_bounds__(256, 2)
+#endif
+
 inline size_t div_ceil(size_t a, size_t b) { return (a + b - 1) / b; }
 
 inline std::pair<dim3, dim3> kernel_launch_params(
