@@ -37,9 +37,9 @@ crate::gpu_link! {
 
 static MEMORY_MANAGER: OnceLock<Mutex<MemoryManager>> = OnceLock::new();
 
-pub fn device_memory_used() -> usize {
-    let (free, total) = cuda::gpu_mem_info();
-    total - free
+/// Returns `(free_bytes, total_bytes)` of GPU device memory.
+pub fn gpu_memory_info() -> (usize, usize) {
+    cuda::gpu_mem_info()
 }
 
 #[ctor::ctor]
@@ -187,6 +187,97 @@ pub fn d_malloc_on(size: usize, stream: &StreamGuard) -> Result<*mut c_void, Mem
     let manager = MEMORY_MANAGER.get().unwrap();
     let mut manager = manager.lock().map_err(|_| MemoryError::LockError)?;
     manager.d_malloc_on(size, stream)
+}
+
+/// Release all free (unallocated) VPMM pages back to the OS/driver.
+///
+/// On NVIDIA: always enabled — the driver handles VA remapping correctly.
+///
+/// On AMD (RDNA): disabled by default because the virtually-tagged L1
+/// cache can serve stale data if the same VA is re-backed with a new
+/// physical page. Use [`force_release_free_pages`] after proving stages
+/// where the device is synchronized and no stale buffers will be accessed.
+pub fn release_free_pages() {
+    #[cfg(gpu_vendor_amd)]
+    {
+        tracing::debug!("release_free_pages: skipped on AMD (RDNA L1 coherence)");
+    }
+    #[cfg(not(gpu_vendor_amd))]
+    {
+        do_release_free_pages();
+    }
+}
+
+/// Release all free VPMM pages, including on AMD.
+///
+/// Safe after device synchronization when all GPU work is finished and
+/// results are on CPU. The next allocation will re-map pages on demand.
+pub fn force_release_free_pages() {
+    do_release_free_pages();
+}
+
+fn do_release_free_pages() {
+    let Some(manager) = MEMORY_MANAGER.get() else {
+        return;
+    };
+    let Ok(mut manager) = manager.lock() else {
+        tracing::warn!("release_free_pages: failed to acquire lock");
+        return;
+    };
+    let freed = manager.pool.release_free_pages();
+    if freed > 0 {
+        tracing::info!("Released {} of free GPU pages", ByteSize::b(freed as u64));
+    }
+}
+
+/// Release all VPMM resources and reinitialize the pool.
+///
+/// Frees tracked small allocations (`hipFree`), drops the VPMM pool
+/// (which calls `vpmm_unmap` + `vpmm_release` on all active pages and
+/// `vpmm_release_va` on VA reservations), then creates a fresh pool with
+/// new VA reservations. All physical GPU memory returns to the driver.
+///
+/// The fresh pool gets completely new VAs from `vpmm_reserve()`, so there
+/// is no VA reuse and no AMD RDNA L1 cache coherence concern.
+///
+/// Does NOT call `hipDeviceReset()` — that would invalidate GPU state
+/// held by other libraries (e.g. halo2-gpu kernel modules loaded via
+/// `hipModuleLoadData` into static variables) and cause segfaults.
+pub fn release_and_reinit_pool() {
+    let Some(manager) = MEMORY_MANAGER.get() else {
+        return;
+    };
+    let Ok(mut manager) = manager.lock() else {
+        tracing::warn!("release_and_reinit_pool: failed to acquire lock");
+        return;
+    };
+
+    crate::stream::device_synchronize().ok();
+
+    let records: Vec<(*mut c_void, AllocRecord)> = manager
+        .allocated_ptrs
+        .drain()
+        .map(|(nn, rec)| (nn.as_ptr(), rec))
+        .collect();
+    for (ptr, record) in records {
+        #[cfg(gpu_vendor_amd)]
+        {
+            let _ = &record;
+            unsafe { cudaFree(ptr) };
+        }
+        #[cfg(not(gpu_vendor_amd))]
+        unsafe {
+            cudaFreeAsync(ptr, record.stream.as_raw());
+        }
+    }
+    manager.current_size = 0;
+    manager.max_used_size = 0;
+
+    let old_pool = std::mem::replace(&mut manager.pool, VirtualMemoryPool::empty());
+    drop(old_pool);
+
+    manager.pool = VirtualMemoryPool::default();
+    tracing::info!("VPMM pool released and reinitialized");
 }
 
 /// # Safety

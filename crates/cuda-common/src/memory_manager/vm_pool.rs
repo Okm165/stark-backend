@@ -166,6 +166,23 @@ unsafe impl Send for VirtualMemoryPool {}
 unsafe impl Sync for VirtualMemoryPool {}
 
 impl VirtualMemoryPool {
+    /// Creates an empty pool with no VA reservations — placeholder for
+    /// `std::mem::replace` before proper Drop of the old pool.
+    pub(super) fn empty() -> Self {
+        Self {
+            roots: Vec::new(),
+            active_pages: HashMap::new(),
+            free_regions: BTreeMap::new(),
+            malloc_regions: HashMap::new(),
+            unmapped_regions: BTreeMap::new(),
+            zombie_regions: Vec::new(),
+            free_num: 0,
+            page_size: usize::MAX,
+            va_size: 0,
+            device_id: 0,
+        }
+    }
+
     pub(super) fn new(config: VpmmConfig) -> Self {
         let device_id = set_device().unwrap();
 
@@ -789,6 +806,47 @@ impl VirtualMemoryPool {
     /// Returns the total physical memory currently mapped in this pool (in bytes).
     pub(super) fn memory_usage(&self) -> usize {
         self.active_pages.len() * self.page_size
+    }
+
+    /// Unmap and release physical pages that belong to free (unused) regions.
+    ///
+    /// Returns the total number of bytes released. The virtual addresses are moved
+    /// to `unmapped_regions` so they can be re-backed by fresh pages on the next
+    /// allocation.
+    #[cfg_attr(gpu_vendor_amd, allow(dead_code))]
+    pub(super) fn release_free_pages(&mut self) -> usize {
+        device_synchronize().unwrap();
+
+        let mut total_freed: usize = 0;
+        let free_entries: Vec<(CUdeviceptr, usize)> = self
+            .free_regions
+            .iter()
+            .map(|(&ptr, meta)| (ptr, meta.size))
+            .collect();
+
+        for (region_ptr, region_size) in free_entries {
+            for page_addr in page_addrs(region_ptr, region_size, self.page_size) {
+                if let Some(handle) = self.active_pages.remove(&page_addr) {
+                    if let Err(e) = unsafe { vpmm_unmap(page_addr, self.page_size) } {
+                        tracing::error!(
+                            "release_free_pages: vpmm_unmap failed at {:#x}: {:?}",
+                            page_addr,
+                            e
+                        );
+                        self.active_pages.insert(page_addr, handle);
+                        continue;
+                    }
+                    if let Err(e) = unsafe { vpmm_release(handle) } {
+                        tracing::error!("release_free_pages: vpmm_release failed: {:?}", e);
+                    }
+                    total_freed += self.page_size;
+                }
+            }
+            self.insert_unmapped_region(region_ptr, region_size);
+        }
+
+        self.free_regions.clear();
+        total_freed
     }
 }
 
