@@ -3,6 +3,8 @@
 #include "fpext.h"
 #include "frac_ext.cuh"
 #include "launcher.cuh"
+
+#define STACKED_REDUCTION_KERNEL_ATTRS GPU_REGISTER_HEAVY
 #include "sumcheck.cuh"
 #include "utils.cuh"
 #include <algorithm>
@@ -84,6 +86,7 @@ __device__ __forceinline__ Fp barycentric_interpolate_strided(
 // G2(Z) = Σ_{col,x} coeff_rot[col] * (eq_cube(rot_prev(x)) - eq_cube(x)) * q_{col,x}(Z)
 //
 // where coeff_eq[col] = lambda_pows[2*col], coeff_rot[col] = lambda_pows[2*col+1]
+STACKED_REDUCTION_KERNEL_ATTRS
 __global__ void stacked_reduction_round0_block_sum_kernel(
     const FpExt *__restrict__ eq_r_ns, // pointer to EqEvalSegments
     const Fp *__restrict__ trace_ptr,
@@ -236,6 +239,7 @@ __global__ void initialize_k_rot_from_eq_segments_kernel(
 
 // Assumes we are not in degenerate case, in particular n = n_lift > 0
 // Uses warp-aggregated atomics for reduction - no shared memory or __syncthreads() needed.
+STACKED_REDUCTION_KERNEL_ATTRS
 __global__ void stacked_reduction_sumcheck_mle_round_kernel(
     const FpExt *__restrict__ const
         *__restrict__ q_evals,          // pointers to matrices of same height, one per [commit_idx]
