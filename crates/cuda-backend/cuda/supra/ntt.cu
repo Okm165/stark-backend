@@ -20,17 +20,22 @@
 #include "ntt/ntt.cuh"
 
 template <int z_count, bool coalesced = false, class fr_t>
-__launch_bounds__(768, 1) __global__ void _CT_NTT(
-    const unsigned int radix,
-    const unsigned int lg_domain_size,
-    const unsigned int stage,
-    const unsigned int iterations,
-    fr_t *d_inout,
-    const unsigned int padded_poly_size,
-    const uint32_t poly_count,
-    bool is_intt,
-    const fr_t d_domain_size_inverse
-) {
+#if defined(__HIPCC__)
+__launch_bounds__(256, 1)
+#else
+__launch_bounds__(768, 1)
+#endif
+    __global__ void _CT_NTT(
+        const unsigned int radix,
+        const unsigned int lg_domain_size,
+        const unsigned int stage,
+        const unsigned int iterations,
+        fr_t *d_inout,
+        const unsigned int padded_poly_size,
+        const uint32_t poly_count,
+        bool is_intt,
+        const fr_t d_domain_size_inverse
+    ) {
 #if (__CUDACC_VER_MAJOR__ - 0) >= 11
     __builtin_assume(lg_domain_size <= MAX_LG_DOMAIN_SIZE);
     __builtin_assume(radix <= 10);
@@ -53,6 +58,11 @@ __launch_bounds__(768, 1) __global__ void _CT_NTT(
     d_inout +=
         static_cast<size_t>(poly_idx) * padded_poly_size; // [DIFF]: move in/out ptr to another row
 
+    // AMD HIP fix: when block_size is padded to WARP_SIZE, threads beyond the
+    // actual domain must participate in warp shuffles but not access memory.
+    const index_t num_threads = (index_t)1 << (lg_domain_size - 1);
+    const bool active = tid < num_threads;
+
     const index_t diff_mask = (1 << (iterations - 1)) - 1;
     const index_t inp_mask = ((index_t)1 << stage) - 1;
     const index_t out_mask = ((index_t)1 << (stage + iterations - 1)) - 1;
@@ -67,7 +77,13 @@ __launch_bounds__(768, 1) __global__ void _CT_NTT(
 
     fr_t r[2][z_count];
 
-    if (coalesced) {
+    if (!active) {
+#pragma unroll
+        for (int z = 0; z < z_count; z++) {
+            r[0][z] = fr_t();
+            r[1][z] = fr_t();
+        }
+    } else if (coalesced) {
         coalesced_load<z_count>(r[0], d_inout, idx0, stage + 1);
         coalesced_load<z_count>(r[1], d_inout, idx1, stage + 1);
         transpose<z_count>(r[0]);
@@ -82,7 +98,7 @@ __launch_bounds__(768, 1) __global__ void _CT_NTT(
         }
     }
 
-    if (stage != 0) {
+    if (active && stage != 0) {
         unsigned int thread_ntt_idx = (tiz & diff_mask) * 2;
         unsigned int nbits = MAX_LG_DOMAIN_SIZE - stage;
         index_t idx0 = bit_rev(thread_ntt_idx, nbits);
@@ -193,18 +209,20 @@ __launch_bounds__(768, 1) __global__ void _CT_NTT(
     rotw = (rotw >> 1) | (rotw << (iterations - 1));
     idx1 = (idx1 & ~mask) | (rotw & mask);
 
-    if (coalesced) {
-        transpose<z_count>(r[0]);
-        __syncwarp();
-        transpose<z_count>(r[1]);
-        coalesced_store<z_count>(d_inout, idx0, r[0], stage);
-        coalesced_store<z_count>(d_inout, idx1, r[1], stage);
-    } else {
-        unsigned int z_shift = inp_mask == 0 ? iterations : 0;
+    if (active) {
+        if (coalesced) {
+            transpose<z_count>(r[0]);
+            __syncwarp();
+            transpose<z_count>(r[1]);
+            coalesced_store<z_count>(d_inout, idx0, r[0], stage);
+            coalesced_store<z_count>(d_inout, idx1, r[1], stage);
+        } else {
+            unsigned int z_shift = inp_mask == 0 ? iterations : 0;
 #pragma unroll
-        for (int z = 0; z < z_count; z++) {
-            d_inout[idx0 + (z << z_shift)] = r[0][z];
-            d_inout[idx1 + (z << z_shift)] = r[1][z];
+            for (int z = 0; z < z_count; z++) {
+                d_inout[idx0 + (z << z_shift)] = r[0][z];
+                d_inout[idx1 + (z << z_shift)] = r[1][z];
+            }
         }
     }
 }
@@ -231,6 +249,9 @@ extern "C" int _ct_mixed_radix_narrow(
         return cudaSuccess;
 
     block_size = (num_threads <= block_size) ? num_threads : block_size;
+    // AMD HIP: round up to WARP_SIZE so all warp lanes are active during
+    // __shfl_xor_sync; inactive lanes return stale VGPR data on AMD.
+    block_size = std::max(block_size, (index_t)WARP_SIZE);
     num_blocks = (num_threads + block_size - 1) / block_size;
 
     assert(num_blocks == (unsigned int)num_blocks);

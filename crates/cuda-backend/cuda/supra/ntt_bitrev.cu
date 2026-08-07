@@ -44,13 +44,18 @@ __device__ __forceinline__ unsigned subgroup_sync_mask(uint32_t idx) {
 // Permutes the data in an array such that data[i] = data[bit_reverse(i)]
 // and data[bit_reverse(i)] = data[i]
 template <typename T>
-__launch_bounds__(1024) __global__ void bit_rev_permutation(
-    T *d_out,
-    const T *d_in,
-    uint32_t lg_domain_size,
-    uint32_t padded_poly_size,
-    uint32_t poly_count
-) {
+#if defined(__HIPCC__)
+__launch_bounds__(256)
+#else
+__launch_bounds__(1024)
+#endif
+    __global__ void bit_rev_permutation(
+        T *d_out,
+        const T *d_in,
+        uint32_t lg_domain_size,
+        uint32_t padded_poly_size,
+        uint32_t poly_count
+    ) {
     const uint32_t poly_idx =
         blockIdx.y + blockIdx.z * gridDim.y; // [DIFF]: use gridDim.y to calculate poly_idx
     if (poly_idx >= poly_count)
@@ -84,6 +89,9 @@ __launch_bounds__(1024) __global__ void bit_rev_permutation(
 }
 
 template <typename T, unsigned int Z_COUNT>
+#ifdef __HIPCC__
+__attribute__((amdgpu_waves_per_eu(1, 4))) __attribute__((amdgpu_flat_work_group_size(64, 256)))
+#endif
 __launch_bounds__(192, 2) __global__ void bit_rev_permutation_z(
     T *out,
     const T *in,
@@ -99,9 +107,16 @@ __launch_bounds__(192, 2) __global__ void bit_rev_permutation_z(
 
     const uint32_t LG_Z_COUNT = 31 - __clz(Z_COUNT); // [DIFF]: use __clz to get lg2
 
-    // Use byte array for extern shared memory to avoid symbol conflicts across template instantiations
+    // Pad innermost dimension to avoid shared memory bank conflicts.
+    // NVIDIA: 32 banks × 4 bytes = no conflict for Z_COUNT-strided access
+    // AMD RDNA3: 32 banks × 32 bytes — padding by 1 element shifts each row
+    // by sizeof(T), breaking the alignment pattern.
+    static constexpr uint32_t SHMEM_PAD = 1;
+    static constexpr uint32_t Z_STRIDE = Z_COUNT + SHMEM_PAD;
+
     extern __shared__ unsigned char xchg_raw[];
-    T(*xchg)[Z_COUNT][Z_COUNT] = reinterpret_cast<T(*)[Z_COUNT][Z_COUNT]>(xchg_raw);
+    // Layout: [threads_per_group][Z_COUNT][Z_STRIDE] with bank-conflict padding
+    T(*xchg)[Z_COUNT][Z_STRIDE] = reinterpret_cast<T(*)[Z_COUNT][Z_STRIDE]>(xchg_raw);
 
     uint32_t gid = threadIdx.x / Z_COUNT;
     uint32_t idx = threadIdx.x % Z_COUNT;
@@ -178,6 +193,8 @@ static int bit_rev_impl(
     // aim to read 4 cache lines of consecutive data per read
     const uint32_t Z_COUNT = 256 / sizeof(T);
     const uint32_t bsize = Z_COUNT > WARP_SIZE ? Z_COUNT : WARP_SIZE;
+    // COBRA-style padding: +1 element per row to avoid bank conflicts
+    const uint32_t Z_STRIDE = Z_COUNT + 1;
 
     if (poly_count == 0)
         return cudaSuccess;
@@ -188,7 +205,12 @@ static int bit_rev_impl(
     uint32_t grid_z = (poly_count + grid_y - 1) / grid_y;
 
     // [DIFF]: N -> dim3(N, poly_count) in grid_size; stream -> caller-provided stream
-    if (domain_size <= 1024)
+#if defined(__HIPCC__)
+    const uint32_t max_block = 256;
+#else
+    const uint32_t max_block = 1024;
+#endif
+    if (domain_size <= max_block)
         bit_rev_permutation<T><<<dim3(1u, grid_y, grid_z), domain_size, 0, stream>>>(
             d_out, d_inp, lg_domain_size, padded_poly_size, poly_count
         );
@@ -201,7 +223,7 @@ static int bit_rev_impl(
         bit_rev_permutation_z<T, Z_COUNT>
             <<<dim3(domain_size / Z_COUNT / bsize, grid_y, grid_z),
                bsize,
-               bsize * Z_COUNT * sizeof(T),
+               bsize * Z_STRIDE * sizeof(T),
                stream>>>(d_out, d_inp, lg_domain_size, padded_poly_size, poly_count);
     else {
         // Those GPUs that can reserve 96KB of shared memory can
@@ -212,7 +234,7 @@ static int bit_rev_impl(
         cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device);
 
         bit_rev_permutation_z<T, Z_COUNT>
-            <<<dim3(sm_count * 2, grid_y, grid_z), 192, 192 * Z_COUNT * sizeof(T), stream>>>(
+            <<<dim3(sm_count * 2, grid_y, grid_z), 192, 192 * Z_STRIDE * sizeof(T), stream>>>(
                 d_out, d_inp, lg_domain_size, padded_poly_size, poly_count
             );
     }

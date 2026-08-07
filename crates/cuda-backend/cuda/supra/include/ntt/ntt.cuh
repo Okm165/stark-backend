@@ -16,7 +16,6 @@
 #define __NTT_CUH__
 
 #include "parameters.cuh"
-#include <cooperative_groups.h>
 
 template <typename T> __device__ __forceinline__ T bit_rev(T i, unsigned int nbits) {
     if (sizeof(i) == 4 || nbits <= 32)
