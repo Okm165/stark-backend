@@ -377,7 +377,10 @@ pub unsafe fn bn254_poseidon2_adjacent_compress_layer(
     ))
 }
 
-/// Launch the BN254 sponge grinding kernel.
+/// Launch the BN254 sponge grinding kernel over the full witness space.
+///
+/// Searches `[0, max_witness]` in batches of `2^bits`.
+/// Each kernel invocation checks one candidate per GPU thread.
 ///
 /// # Safety
 /// - `init_state` must point to valid device memory.
@@ -394,7 +397,9 @@ pub unsafe fn bn254_sponge_grind(
     let mut d_result: DeviceBuffer<u32> = DeviceBuffer::with_capacity_on(1, device_ctx);
     [u32::MAX].copy_to_on(&mut d_result, device_ctx)?;
 
-    for start in (0..=max_witness).step_by(1 << bits) {
+    let step = 1u32 << bits;
+
+    for start in (0..=max_witness).step_by(step as usize) {
         CudaError::from_result(_bn254_sponge_grind(
             init_state,
             bits,
@@ -408,6 +413,50 @@ pub unsafe fn bn254_sponge_grind(
         if result < u32::MAX {
             return Ok(result);
         }
+    }
+    Err(crate::sponge::GrindError::WitnessNotFound)
+}
+
+/// Launch BN254 sponge grinding over a specific witness range.
+///
+/// Searches `[min_witness, max_witness]` with stride `witness_step`.
+/// Used by the distributed grinding protocol to partition the search space.
+///
+/// # Safety
+/// - `init_state` must point to valid device memory.
+pub unsafe fn bn254_sponge_grind_range(
+    init_state: *const DeviceBn254SpongeState,
+    bits: u32,
+    min_witness: u32,
+    max_witness: u32,
+    witness_step: u32,
+    device_ctx: &GpuDeviceCtx,
+) -> Result<u32, crate::sponge::GrindError> {
+    use openvm_cuda_common::copy::{MemCopyD2H, MemCopyH2D};
+
+    init_bn254_poseidon2_rc()?;
+    validate_gpu_grind_bits(bits as usize)?;
+    let mut d_result: DeviceBuffer<u32> = DeviceBuffer::with_capacity_on(1, device_ctx);
+    [u32::MAX].copy_to_on(&mut d_result, device_ctx)?;
+
+    let step = 1u32 << bits;
+    let mut offset = min_witness;
+
+    while offset <= max_witness {
+        CudaError::from_result(_bn254_sponge_grind(
+            init_state,
+            bits,
+            offset,
+            max_witness,
+            d_result.as_mut_ptr(),
+            device_ctx.stream.as_raw(),
+        ))?;
+
+        let result = d_result.to_host_on(device_ctx)?[0];
+        if result < u32::MAX {
+            return Ok(result);
+        }
+        offset = offset.saturating_add(step.saturating_mul(witness_step));
     }
     Err(crate::sponge::GrindError::WitnessNotFound)
 }
