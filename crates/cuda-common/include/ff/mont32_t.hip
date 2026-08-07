@@ -22,7 +22,12 @@
 # define v_addc_co_u32 "v_dummy "
 # define v_subb_co_u32 "v_dummy "
 # else
-# error "unsupported GFX architecture"
+// Future GFX architectures (GFX13+, etc.): assume RDNA-style mnemonics.
+// If this assumption is wrong, compilation will fail with assembler errors
+// which is safer than silent wrong results.
+# pragma message "mont32_t.hip: unknown GFX ISA — assuming RDNA-style carry mnemonics"
+# define v_addc_co_u32 "v_add_co_ci_u32 "
+# define v_subb_co_u32 "v_sub_co_ci_u32 "
 # endif
 
 # define __MONT32_T_STR(x) #x
@@ -343,7 +348,8 @@ public:
 
     inline void shfl_bfly(uint32_t laneMask)
     {
-        val = __shfl_xor_sync(0xFFFFFFFF, val, laneMask);
+        uint32_t idx = (threadIdx.x ^ laneMask) << 2;
+        val = __builtin_amdgcn_ds_bpermute(idx, val);
     }
 
 protected:
