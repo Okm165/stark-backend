@@ -45,6 +45,7 @@ static const auto cudaDeviceGetAttribute  = hipDeviceGetAttribute;
 using cudaMemcpyKind = hipMemcpyKind;
 static const auto cudaMemcpy      = hipMemcpy;
 static const auto cudaMemcpyAsync = hipMemcpyAsync;
+static const auto cudaMemsetAsync = hipMemsetAsync;
 #define cudaMemcpyHostToDevice   hipMemcpyHostToDevice
 #define cudaMemcpyDeviceToHost   hipMemcpyDeviceToHost
 #define cudaMemcpyDeviceToDevice hipMemcpyDeviceToDevice
@@ -56,6 +57,7 @@ static const auto cudaMemcpyAsync = hipMemcpyAsync;
 // Error handling
 using cudaError_t = hipError_t;
 static const auto cudaGetLastError    = hipGetLastError;
+static const auto cudaPeekAtLastError = hipPeekAtLastError;
 static const auto cudaGetErrorString  = hipGetErrorString;
 static const auto cudaGetErrorName    = hipGetErrorName;
 #define cudaSuccess               hipSuccess
@@ -135,6 +137,33 @@ __device__ inline void __hip_syncwarp_impl(unsigned int mask) {
 }
 #undef __syncwarp
 #define __syncwarp(...) do { __hip_syncwarp_impl(__VA_ARGS__); asm volatile("" ::: "memory"); } while(0)
+
+// ── Step 4b: Additional warp-level primitives ───────────────────────
+
+// __activemask() — returns mask of active lanes in current warp.
+// HIP __ballot(1) returns 64-bit; truncate to 32-bit for Wave32
+// (RDNA3/gfx1100, RDNA4/gfx1201). Requires revision for Wave64 (CDNA).
+#define __activemask() static_cast<unsigned int>(__ballot(1))
+
+// __shfl_sync — plain broadcast shuffle (completes the set with xor/down).
+template<typename MaskT, typename T>
+__device__ inline T __hip_orig_shfl_sync(MaskT mask, T var, int srcLane, int width = warpSize) {
+    return ::__shfl_sync(static_cast<unsigned long long>(mask), var, srcLane, width);
+}
+#undef __shfl_sync
+#define __shfl_sync(mask, var, srcLane, ...) \
+    __hip_orig_shfl_sync(static_cast<unsigned long long>(mask), (var), (srcLane) __VA_OPT__(,) __VA_ARGS__)
+
+// __ballot_sync — warp vote with mask.
+// HIP __ballot considers ALL active lanes, but CUDA __ballot_sync only
+// considers lanes within the provided mask. The AND is essential.
+#define __ballot_sync(mask, pred) \
+    (static_cast<unsigned int>(__ballot(pred)) & static_cast<unsigned int>(mask))
+
+// Pinned memory pool hygiene mappings
+#define cudaHostRegister    hipHostRegister
+#define cudaHostUnregister  hipHostUnregister
+#define cudaDeviceReset     hipDeviceReset
 
 // ── Step 5: CUDA Driver API mappings (for VPMM) ────────────────────
 //
