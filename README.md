@@ -26,6 +26,26 @@ Contributors should read [Development without CUDA](./docs/README.md#development
 
 As of July 2026, STARK Backend v2.0.0 and later are recommended for production use. STARK Backend uses the SWIRL proof system and completed an external [audit](https://github.com/openvm-org/openvm/tree/v2.0.0/audits/v2) by [zkSecurity](https://zksecurity.xyz/).
 
+## GPU Support (AMD + NVIDIA)
+
+The CUDA backend supports both NVIDIA (CUDA) and AMD (ROCm/HIP) GPUs through the `cuda-builder` crate's HIP translation layer.
+
+### Key AMD/RDNA3 Optimizations
+
+- **mont32_t.hip**: Native `ds_bpermute` for lane permutation (replaces runtime `__shfl_xor_sync` shim)
+- **NTT bitrev**: COBRA-style bank-conflict padding (Z_STRIDE = Z_COUNT + 1), active-thread masking
+- **Sumcheck**: Horner accumulation (FpExt add replaces FpExt×FpExt mul), single-load optimization
+- **Launch bounds**: GPU_REGISTER_HEAVY macro with `amdgpu_waves_per_eu(1,4)` for register-heavy kernels
+- **VPMM**: release_free_pages for GPU memory reclamation between proving phases (disabled on AMD due to RDNA L1 cache coherence)
+- **Histogram**: Warp-deduplicated atomicAdd on CUDA sm_70+ / plain fallback on HIP
+
+### Building for AMD
+
+```bash
+cargo build --release -p openvm-cuda-backend
+# HIP is auto-detected via cuda-builder when ROCM_PATH is set
+```
+
 ## Security
 
 See [SECURITY.md](./SECURITY.md).
