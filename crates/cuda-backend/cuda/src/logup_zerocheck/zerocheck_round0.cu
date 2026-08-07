@@ -16,6 +16,8 @@
 #include "sumcheck.cuh"
 #include "utils.cuh"
 
+#define ZEROCHECK_KERNEL_ATTRS GPU_REGISTER_HEAVY
+
 using namespace symbolic_dag;
 
 namespace zerocheck_round0 {
@@ -153,6 +155,7 @@ __device__ __inline__ void acc_constraints(
 // Key optimization: iNTT is done ONCE per trace access, then coefficient is
 // used for all coset shifts + forward NTTs.
 template <uint32_t NUM_COSETS, bool GLOBAL, bool NEEDS_SHMEM>
+ZEROCHECK_KERNEL_ATTRS
 __global__ void zerocheck_ntt_evaluate_constraints_kernel(
     FpExt *__restrict__ tmp_sums_buffer,   // [num_blocks][NUM_COSETS][skip_domain]
     const Fp *__restrict__ selectors_cube, // [3][num_x]
