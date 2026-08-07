@@ -120,9 +120,16 @@ int launch_batch_ntt_small(
     size_t const cnt_blocks,
     cudaStream_t stream
 ) {
-    uint32_t const threads_per_block = 1024;
     uint32_t const threads_x = 1 << l_skip;
-    assert(threads_per_block >> l_skip);
+#if defined(__HIPCC__)
+    // HIP shared-memory reductions miscompile above 256 threads on RDNA3.
+    // Rust-side MAX_SMALL_NTT_LEVEL must be capped to 8 on AMD so threads_x <= 256.
+    uint32_t const threads_per_block = std::max(threads_x, 256u);
+    assert(threads_per_block <= 256 && "l_skip > 8 exceeds safe HIP block size");
+#else
+    uint32_t const threads_per_block = 1024;
+#endif
+    assert(threads_per_block >= threads_x);
     uint32_t const threads_y = threads_per_block / threads_x;
     size_t const smem_size = needs_shmem ? (sizeof(Fp) * threads_per_block) : 0;
 

@@ -324,10 +324,14 @@ extern "C" int _eval_poly_ext_at_point(
         return launch_eval_poly_ext_at_point<64>(coeffs, len, x, out, stream);
     } else if (len <= 4096) {
         return launch_eval_poly_ext_at_point<128>(coeffs, len, x, out, stream);
-    } else if (len <= 65536) {
-        return launch_eval_poly_ext_at_point<256>(coeffs, len, x, out, stream);
     } else {
+#if defined(__HIPCC__)
+        return launch_eval_poly_ext_at_point<256>(coeffs, len, x, out, stream);
+#else
+        if (len <= 65536)
+            return launch_eval_poly_ext_at_point<256>(coeffs, len, x, out, stream);
         return launch_eval_poly_ext_at_point<512>(coeffs, len, x, out, stream);
+#endif
     }
 }
 
