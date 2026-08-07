@@ -23,12 +23,20 @@ use crate::prelude::F;
 /// redesigned or explicitly opts into larger dynamic shared memory.
 pub const MAX_SMALL_NTT_LEVEL: usize = 9;
 
+#[cfg(gpu_vendor_amd)]
+const EFFECTIVE_MAX_SMALL_NTT_LEVEL: usize = 8;
+#[cfg(not(gpu_vendor_amd))]
+const EFFECTIVE_MAX_SMALL_NTT_LEVEL: usize = MAX_SMALL_NTT_LEVEL;
+
 /// Validate the current CUDA backend `l_skip` support boundary.
 ///
 /// `l_skip == 0` is explicitly allowed and means the caller can take the size-1 no-op path
 /// without launching the small-NTT kernel.
+///
+/// On AMD (HIP), the effective limit is 8 because RDNA3 shared-memory reductions
+/// miscompile above 256 threads (l_skip=9 would require 512).
 pub fn validate_gpu_l_skip(l_skip: usize) -> Result<(), CudaError> {
-    if l_skip > MAX_SMALL_NTT_LEVEL {
+    if l_skip > EFFECTIVE_MAX_SMALL_NTT_LEVEL {
         return Err(CudaError::new(1));
     }
     Ok(())

@@ -3,12 +3,18 @@ use openvm_cuda_common::{d_buffer::DeviceBuffer, error::CudaError, stream::cudaS
 use crate::prelude::{Digest, EF, F};
 
 pub(super) const MAX_MERKLE_LOG_ROWS_PER_QUERY: usize = 10;
+
+#[cfg(gpu_vendor_amd)]
+const EFFECTIVE_MAX_LOG_ROWS: usize = 8;
+#[cfg(not(gpu_vendor_amd))]
+const EFFECTIVE_MAX_LOG_ROWS: usize = MAX_MERKLE_LOG_ROWS_PER_QUERY;
+
 const MAX_CUDA_GRID_Y: usize = u16::MAX as usize;
 
 pub(super) fn validate_merkle_log_rows_per_query(
     log_rows_per_query: usize,
 ) -> Result<(), CudaError> {
-    if log_rows_per_query > MAX_MERKLE_LOG_ROWS_PER_QUERY {
+    if log_rows_per_query > EFFECTIVE_MAX_LOG_ROWS {
         return Err(CudaError::new(1));
     }
     Ok(())
