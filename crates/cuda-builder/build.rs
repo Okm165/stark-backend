@@ -42,6 +42,10 @@ fn generate_hip_stubs(dir: &str) {
             "cub/device/device_scan.cuh",
             "hipcub/device/device_scan.hpp",
         ),
+        (
+            "cub/device/device_select.cuh",
+            "hipcub/device/device_select.hpp",
+        ),
     ];
 
     for name in empty_stubs {
