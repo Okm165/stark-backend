@@ -12,7 +12,7 @@ struct FracExt {
     }
 };
 
-__device__ __forceinline__ void frac_add_inplace(FracExt& lhs, FracExt const& rhs) {
+__device__ __forceinline__ void frac_add_inplace(FracExt &lhs, FracExt const &rhs) {
     lhs.p = lhs.p * rhs.q + lhs.q * rhs.p;
     lhs.q = lhs.q * rhs.q;
 }
@@ -22,7 +22,7 @@ __device__ __forceinline__ FracExt frac_add(FracExt a, const FracExt &b) {
     return a;
 }
 
-__device__ __forceinline__ void frac_unadd_inplace(FracExt& lhs, FracExt const& rhs) {
+__device__ __forceinline__ void frac_unadd_inplace(FracExt &lhs, FracExt const &rhs) {
     FpExt rhs_denom_inv = inv(rhs.q);
     lhs.q = lhs.q * rhs_denom_inv;
     lhs.p = (lhs.p - lhs.q * rhs.p) * rhs_denom_inv;

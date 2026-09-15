@@ -465,13 +465,17 @@ fn test_bn254_row_hash_emulation_matches_host_multi_block_rows() {
 }
 
 #[test]
-fn test_merkle_gpu_supports_512_rows_per_query() {
+fn test_merkle_gpu_supports_max_rows_per_query() {
     use openvm_cuda_common::copy::MemCopyH2D;
 
     let ctx = test_ctx();
-    let height = 1 << 9;
+    #[cfg(gpu_vendor_amd)]
+    let log_rpq: usize = 8;
+    #[cfg(not(gpu_vendor_amd))]
+    let log_rpq: usize = 9;
+    let height = 1 << log_rpq;
     let width = 7;
-    let rows_per_query = 1 << 9;
+    let rows_per_query = 1 << log_rpq;
     let host_matrix = (0..width * height)
         .map(|i| F::from_u32((i as u32).wrapping_mul(31).wrapping_add((i >> 2) as u32)))
         .collect_vec();
@@ -484,7 +488,7 @@ fn test_merkle_gpu_supports_512_rows_per_query() {
     let tree = MerkleTreeGpu::<F, crate::prelude::Digest>::new_with_hash::<
         crate::hash_scheme::Poseidon2MerkleHash,
     >(device_matrix, rows_per_query, true, &ctx)
-    .expect("rows_per_query=512 should be supported");
+    .unwrap_or_else(|e| panic!("rows_per_query={rows_per_query} should be supported: {e:?}"));
 
     assert_eq!(tree.query_stride(), 1);
     assert_eq!(tree.proof_depth(), 0);
@@ -573,16 +577,25 @@ fn test_interactions_roundtrip_with_l_skip_zero() {
 }
 
 #[test]
-fn test_gpu_l_skip_10_is_rejected() {
+fn test_gpu_l_skip_boundary_is_enforced() {
     use crate::cuda::batch_ntt_small::validate_gpu_l_skip;
 
-    assert!(validate_gpu_l_skip(9).is_ok());
-    assert!(validate_gpu_l_skip(10).is_err());
+    #[cfg(not(gpu_vendor_amd))]
+    {
+        assert!(validate_gpu_l_skip(9).is_ok());
+        assert!(validate_gpu_l_skip(10).is_err());
+    }
+    #[cfg(gpu_vendor_amd)]
+    {
+        assert!(validate_gpu_l_skip(8).is_ok());
+        assert!(validate_gpu_l_skip(9).is_err());
+    }
 }
 
 #[test_case(1 ; "l_skip_1")]
 #[test_case(4 ; "l_skip_4")]
-#[test_case(9 ; "l_skip_9")]
+#[cfg_attr(not(gpu_vendor_amd), test_case(9 ; "l_skip_9"))]
+#[test_case(8 ; "l_skip_8")]
 fn test_batch_ntt_small_partial_last_block_roundtrip(l_skip: usize) {
     use openvm_cuda_common::copy::{MemCopyD2H, MemCopyH2D};
 
@@ -622,10 +635,11 @@ fn test_batch_ntt_small_partial_last_block_roundtrip(l_skip: usize) {
 ///
 /// These cases exercise `ntt_coset_interpolate` through the normal proving path with
 /// a mixture of cached, preprocessed, interaction, and regular traces. `l_skip = 6`
-/// is the first shared-memory NTT size; `l_skip = 9` exercises a larger supported
-/// skip domain while staying under the current round0 CUDA resource limit.
+/// is the first shared-memory NTT size; higher values exercise larger supported
+/// skip domains while staying under platform-specific CUDA/HIP resource limits.
 #[test_case(6 ; "l_skip_6")]
-#[test_case(9 ; "l_skip_9")]
+#[cfg_attr(not(gpu_vendor_amd), test_case(9 ; "l_skip_9"))]
+#[test_case(8 ; "l_skip_8")]
 fn test_mixture_fixture_gpu_roundtrip_large_l_skip(l_skip: usize) {
     use openvm_stark_backend::test_utils::{test_system_params_small, MixtureFixture};
 

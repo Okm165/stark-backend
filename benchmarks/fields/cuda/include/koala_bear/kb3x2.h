@@ -179,8 +179,8 @@ struct Kb3x2 {
     static constexpr uint32_t W = 3;  // z² = 3
     
     __device__ Kb3x2() : c0(), c1() {}
-    __device__ Kb3x2(Kb a) : c0(a), c1() {}
-    __device__ Kb3x2(Kb3 a0) : c0(a0), c1() {}
+    __device__ explicit Kb3x2(Kb a) : c0(a), c1() {}
+    __device__ explicit Kb3x2(Kb3 a0) : c0(a0), c1() {}
     __device__ Kb3x2(Kb3 a0, Kb3 a1) : c0(a0), c1(a1) {}
     __device__ explicit Kb3x2(uint32_t x) : c0(Kb(x)), c1() {}
     

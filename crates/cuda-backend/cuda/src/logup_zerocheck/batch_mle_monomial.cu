@@ -83,7 +83,9 @@ extern "C" int _precompute_lambda_combinations(
     const MonomialHeader *headers,
     const LambdaTerm *lambda_terms,
     const FpExt *lambda_pows,
-    uint32_t num_monomials, cudaStream_t stream) {
+    uint32_t num_monomials,
+    cudaStream_t stream
+) {
     if (num_monomials == 0)
         return 0;
 
@@ -159,7 +161,9 @@ extern "C" int _zerocheck_monomial_batched(
     uint32_t num_blocks,
     uint32_t num_x,
     uint32_t num_airs,
-    uint32_t threads_per_block, cudaStream_t stream) {
+    uint32_t threads_per_block,
+    cudaStream_t stream
+) {
     if (num_blocks == 0) {
         return 0;
     }
@@ -267,7 +271,9 @@ extern "C" int _zerocheck_monomial_par_y_batched(
     uint32_t num_x,
     uint32_t num_airs,
     uint32_t chunk_size,
-    uint32_t threads_per_block, cudaStream_t stream) {
+    uint32_t threads_per_block,
+    cudaStream_t stream
+) {
     if (num_blocks == 0) {
         return 0;
     }
@@ -335,15 +341,16 @@ extern "C" int _precompute_logup_numer_combinations(
     const MonomialHeader *headers,
     const InteractionMonomialTerm *terms,
     const FpExt *eq_3bs,
-    uint32_t num_monomials, cudaStream_t stream) {
+    uint32_t num_monomials,
+    cudaStream_t stream
+) {
     if (num_monomials == 0)
         return 0;
 
     constexpr uint32_t threads = 256;
     uint32_t blocks = div_ceil(num_monomials, threads);
-    precompute_logup_combinations_kernel<false><<<blocks, threads, 0, stream>>>(
-        out, headers, terms, nullptr, eq_3bs, num_monomials
-    );
+    precompute_logup_combinations_kernel<false>
+        <<<blocks, threads, 0, stream>>>(out, headers, terms, nullptr, eq_3bs, num_monomials);
     return CHECK_KERNEL();
 }
 
@@ -353,15 +360,16 @@ extern "C" int _precompute_logup_denom_combinations(
     const InteractionMonomialTerm *terms,
     const FpExt *beta_pows,
     const FpExt *eq_3bs,
-    uint32_t num_monomials, cudaStream_t stream) {
+    uint32_t num_monomials,
+    cudaStream_t stream
+) {
     if (num_monomials == 0)
         return 0;
 
     constexpr uint32_t threads = 256;
     uint32_t blocks = div_ceil(num_monomials, threads);
-    precompute_logup_combinations_kernel<true><<<blocks, threads, 0, stream>>>(
-        out, headers, terms, beta_pows, eq_3bs, num_monomials
-    );
+    precompute_logup_combinations_kernel<true>
+        <<<blocks, threads, 0, stream>>>(out, headers, terms, beta_pows, eq_3bs, num_monomials);
     return CHECK_KERNEL();
 }
 
@@ -454,7 +462,9 @@ extern "C" int _logup_monomial_batched(
     uint32_t num_blocks,
     uint32_t num_x,
     uint32_t num_airs,
-    uint32_t threads_per_block, cudaStream_t stream) {
+    uint32_t threads_per_block,
+    cudaStream_t stream
+) {
     if (num_blocks == 0)
         return 0;
     if (!valid_frac_grid_y_dim(num_x)) {
@@ -466,17 +476,15 @@ extern "C" int _logup_monomial_batched(
     size_t shmem = div_ceil(threads_per_block, WARP_SIZE) * sizeof(FpExt);
 
     // Phase 1: Evaluate numerator monomials
-    logup_monomial_kernel<false><<<grid, block, shmem, stream>>>(
-        tmp_sums, block_ctxs, common_ctxs, numer_ctxs
-    );
+    logup_monomial_kernel<false>
+        <<<grid, block, shmem, stream>>>(tmp_sums, block_ctxs, common_ctxs, numer_ctxs);
     int err = CHECK_KERNEL();
     if (err != 0)
         return err;
 
     // Phase 1b: Evaluate denominator monomials
-    logup_monomial_kernel<true><<<grid, block, shmem, stream>>>(
-        tmp_sums, block_ctxs, common_ctxs, denom_ctxs
-    );
+    logup_monomial_kernel<true>
+        <<<grid, block, shmem, stream>>>(tmp_sums, block_ctxs, common_ctxs, denom_ctxs);
     err = CHECK_KERNEL();
     if (err != 0)
         return err;

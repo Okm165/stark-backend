@@ -18,10 +18,10 @@ template <uint32_t NUM_COSETS> struct NttEvalContext {
     const Fp *const *__restrict__ main_parts;
     const Fp *__restrict__ public_values;
     Fp *__restrict__ inter_buffer; // [buffer_size][NUM_COSETS] per thread
-    Fp *ntt_buffer;   // shared memory for NTT scratch (only when NEEDS_SHMEM)
-    Fp omega_shifts[NUM_COSETS]; // precomputed: g^((c+1)*ntt_idx_rev)
-    uint32_t skip_domain;        // 2^l_skip
-    uint32_t height;             // trace height (could be < num_x * skip_domain in lifted case)
+    Fp *ntt_buffer;                // shared memory for NTT scratch (only when NEEDS_SHMEM)
+    Fp omega_shifts[NUM_COSETS];   // precomputed: g^((c+1)*ntt_idx_rev)
+    uint32_t skip_domain;          // 2^l_skip
+    uint32_t height;               // trace height (could be < num_x * skip_domain in lifted case)
     uint32_t buffer_stride;
     uint32_t buffer_size;
     uint32_t ntt_idx; // 0..skip_domain (thread's position within skip domain)
@@ -53,7 +53,7 @@ __device__ __forceinline__ void ntt_coset_interpolate(
     Fp *__restrict__ results,     // output [NUM_COSETS]
     const Fp *__restrict__ evals, // must have length height = num_x * skip_domain
     const Fp *omega_shifts,       // [NUM_COSETS] precomputed shifts
-    Fp *ntt_buffer,  // shared memory for NTT scratch (unused when !NEEDS_SHMEM)
+    Fp *ntt_buffer,               // shared memory for NTT scratch (unused when !NEEDS_SHMEM)
     uint32_t ntt_idx,
     uint32_t x_int,
     uint32_t skip_domain,
@@ -116,7 +116,9 @@ __device__ __forceinline__ void ntt_coset_interpolate(
         for (uint32_t c = start_c; c < NUM_COSETS; c++) {
             Fp shifted = saved_coeff * omega_shifts[c];
             // For both possibilities of NEEDS_SHMEM, this function starts from the register value `shifted` and then overwrites shared `ntt_buffer` in every location before syncthreads. Hence we don't need a sync between calls to iNTT and cosetNTTs.
-            device_ntt::ntt_bitrev_to_natural<false, NEEDS_SHMEM>(shifted, ntt_buffer, ntt_idx, l_skip);
+            device_ntt::ntt_bitrev_to_natural<false, NEEDS_SHMEM>(
+                shifted, ntt_buffer, ntt_idx, l_skip
+            );
             results[c] = shifted;
         }
     }

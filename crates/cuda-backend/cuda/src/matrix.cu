@@ -237,7 +237,13 @@ __global__ void batch_expand_pad_wide_kernel(
 constexpr uint32_t MAX_GRID_DIM = 65535u;
 
 template <typename T>
-int matrix_transpose_impl(T *output, const T *input, size_t col_size, size_t row_size, cudaStream_t stream) {
+int matrix_transpose_impl(
+    T *output,
+    const T *input,
+    size_t col_size,
+    size_t row_size,
+    cudaStream_t stream
+) {
     uint32_t grid_x = (col_size + TILE_SIZE - 1) / TILE_SIZE;
     uint32_t grid_y = (row_size + TILE_SIZE - 1) / TILE_SIZE;
 
@@ -249,7 +255,13 @@ int matrix_transpose_impl(T *output, const T *input, size_t col_size, size_t row
     return CHECK_KERNEL();
 }
 
-extern "C" int _matrix_transpose_fp(Fp *output, const Fp *input, size_t col_size, size_t row_size, cudaStream_t stream) {
+extern "C" int _matrix_transpose_fp(
+    Fp *output,
+    const Fp *input,
+    size_t col_size,
+    size_t row_size,
+    cudaStream_t stream
+) {
     return matrix_transpose_impl(output, input, col_size, row_size, stream);
 }
 
@@ -313,7 +325,9 @@ extern "C" int _batch_rotate_pad(
     auto num_poly = width * num_x;
     grid.y = std::min(num_poly, MAX_GRID_DIM);
     grid.z = (num_poly + grid.y - 1) / grid.y;
-    batch_rotate_pad_kernel<<<grid, block, 0, stream>>>(out, in, width, num_x, domain_size, padded_size);
+    batch_rotate_pad_kernel<<<grid, block, 0, stream>>>(
+        out, in, width, num_x, domain_size, padded_size
+    );
     return CHECK_KERNEL();
 }
 
@@ -342,7 +356,9 @@ extern "C" int _collapse_strided_matrix(
 ) {
     auto lifted_height = height * stride;
     auto [grid, block] = kernel_launch_2d_params(height, width);
-    collapse_strided_matrix_kernel<<<grid, block, 0, stream>>>(out, in, width, lifted_height, height, stride);
+    collapse_strided_matrix_kernel<<<grid, block, 0, stream>>>(
+        out, in, width, lifted_height, height, stride
+    );
     return CHECK_KERNEL();
 }
 

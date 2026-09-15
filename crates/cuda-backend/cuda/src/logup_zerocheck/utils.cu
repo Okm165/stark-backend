@@ -22,8 +22,8 @@ namespace {
 // Grid: (num_row_blocks, width) where blockIdx.y selects the column
 template <bool ROTATE>
 __global__ void fold_ple_from_evals_kernel(
-    const Fp *__restrict__ input_matrix, // [height * width] column-major
-    FpExt *__restrict__ output_matrix,   // [new_height * width] column-major
+    const Fp *__restrict__ input_matrix,    // [height * width] column-major
+    FpExt *__restrict__ output_matrix,      // [new_height * width] column-major
     const Fp *__restrict__ omega_skip_pows, // [skip_domain]
     const FpExt *inv_lagrange_denoms,       // [skip_domain]
     uint32_t height,
@@ -144,7 +144,9 @@ extern "C" int _fold_ple_from_evals(
     uint32_t width,
     uint32_t l_skip,
     uint32_t new_height,
-    bool rotate, cudaStream_t stream) {
+    bool rotate,
+    cudaStream_t stream
+) {
     uint32_t skip_domain = 1u << l_skip;
 
     // Block size: at least skip_domain, prefer 256 for occupancy
@@ -191,10 +193,14 @@ extern "C" int _interpolate_columns(
     const FpExt *const *columns,
     size_t s_deg,
     size_t num_y,
-    size_t num_columns, cudaStream_t stream) {
+    size_t num_columns,
+    cudaStream_t stream
+) {
     auto [grid, block] = kernel_launch_params(num_y * num_columns, 512);
 
-    interpolate_columns_kernel<<<grid, block, 0, stream>>>(interpolated, columns, s_deg, num_y, num_columns);
+    interpolate_columns_kernel<<<grid, block, 0, stream>>>(
+        interpolated, columns, s_deg, num_y, num_columns
+    );
     return CHECK_KERNEL();
 }
 
@@ -203,12 +209,16 @@ extern "C" int _frac_matrix_vertically_repeat(
     const std::pair<FpExt, FpExt> *in,
     const uint32_t width,
     const uint32_t lifted_height,
-    const uint32_t height, cudaStream_t stream) {
+    const uint32_t height,
+    cudaStream_t stream
+) {
     auto [grid, block] = kernel_launch_params(lifted_height);
     grid.y = std::min(width, MAX_GRID_DIM);
     grid.z = (width + grid.y - 1) / grid.y;
     assert(grid.z <= MAX_GRID_DIM);
-    frac_matrix_vertically_repeat_kernel<<<grid, block, 0, stream>>>(out, in, width, lifted_height, height);
+    frac_matrix_vertically_repeat_kernel<<<grid, block, 0, stream>>>(
+        out, in, width, lifted_height, height
+    );
     return CHECK_KERNEL();
 }
 
@@ -219,7 +229,9 @@ extern "C" int _frac_matrix_vertically_repeat_ext(
     const FpExt *in_denominators,
     const uint32_t width,
     const uint32_t lifted_height,
-    const uint32_t height, cudaStream_t stream) {
+    const uint32_t height,
+    cudaStream_t stream
+) {
     auto [grid, block] = kernel_launch_params(lifted_height);
     grid.y = std::min(width, MAX_GRID_DIM);
     grid.z = (width + grid.y - 1) / grid.y;

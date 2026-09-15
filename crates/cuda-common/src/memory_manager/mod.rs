@@ -8,9 +8,11 @@ use std::{
 
 use bytesize::ByteSize;
 
+#[cfg(not(gpu_vendor_amd))]
+use crate::stream::cudaStream_t;
 use crate::{
     error::{check, MemoryError},
-    stream::{cudaStream_t, device_synchronize, StreamGuard},
+    stream::{device_synchronize, StreamGuard},
 };
 
 mod cuda;
@@ -20,20 +22,24 @@ use vm_pool::VirtualMemoryPool;
 #[cfg(test)]
 mod tests;
 
-#[link(name = "cudart")]
-extern "C" {
+crate::gpu_link! {
+    #[cfg(not(gpu_vendor_amd))]
     fn cudaMallocAsync(dev_ptr: *mut *mut c_void, size: usize, stream: cudaStream_t) -> i32;
+    #[cfg(not(gpu_vendor_amd))]
     fn cudaFreeAsync(dev_ptr: *mut c_void, stream: cudaStream_t) -> i32;
-    fn cudaMemGetInfo(free: *mut usize, total: *mut usize) -> i32;
+    #[cfg(gpu_vendor_amd)]
+    #[link_name = "hipMalloc"]
+    fn cudaMalloc(dev_ptr: *mut *mut c_void, size: usize) -> i32;
+    #[cfg(gpu_vendor_amd)]
+    #[link_name = "hipFree"]
+    fn cudaFree(dev_ptr: *mut c_void) -> i32;
 }
 
 static MEMORY_MANAGER: OnceLock<Mutex<MemoryManager>> = OnceLock::new();
 
-pub fn device_memory_used() -> usize {
-    let mut free = 0usize;
-    let mut total = 0usize;
-    unsafe { cudaMemGetInfo(&mut free, &mut total) };
-    total - free
+/// Returns `(free_bytes, total_bytes)` of GPU device memory.
+pub fn gpu_memory_info() -> (usize, usize) {
+    cuda::gpu_mem_info()
 }
 
 #[ctor::ctor]
@@ -84,12 +90,26 @@ impl MemoryManager {
         let mut tracked_size = size;
         let ptr = if size < self.pool.page_size {
             let mut ptr: *mut c_void = std::ptr::null_mut();
-            check(unsafe { cudaMallocAsync(&mut ptr, size, stream.as_raw()) }).map_err(|e| {
-                tracing::error!("cudaMallocAsync failed: size={}: {:?}", size, e);
-                MemoryError::from(e)
-            })?;
+            #[cfg(gpu_vendor_amd)]
+            {
+                // AMD: use synchronous hipMalloc to avoid hipMallocAsync
+                // stream-ordering bugs that corrupt data on multi-segment proves.
+                check(unsafe { cudaMalloc(&mut ptr, size) }).map_err(|e| {
+                    tracing::error!("cudaMalloc failed: size={}: {:?}", size, e);
+                    MemoryError::from(e)
+                })?;
+            }
+            #[cfg(not(gpu_vendor_amd))]
+            {
+                check(unsafe { cudaMallocAsync(&mut ptr, size, stream.as_raw()) }).map_err(
+                    |e| {
+                        tracing::error!("cudaMallocAsync failed: size={}: {:?}", size, e);
+                        MemoryError::from(e)
+                    },
+                )?;
+            }
             self.allocated_ptrs.insert(
-                NonNull::new(ptr).expect("BUG: cudaMallocAsync returned null"),
+                NonNull::new(ptr).expect("BUG: cudaMalloc(Async) returned null"),
                 AllocRecord {
                     size,
                     stream: stream.clone(),
@@ -121,10 +141,20 @@ impl MemoryManager {
         if let Some(record) = self.allocated_ptrs.remove(&nn) {
             let size = record.size;
             self.current_size -= size;
-            check(unsafe { cudaFreeAsync(ptr, record.stream.as_raw()) }).map_err(|e| {
-                tracing::error!("cudaFreeAsync failed: ptr={:p}: {:?}", ptr, e);
-                MemoryError::from(e)
-            })?;
+            #[cfg(gpu_vendor_amd)]
+            {
+                check(unsafe { cudaFree(ptr) }).map_err(|e| {
+                    tracing::error!("cudaFree failed: ptr={:p}: {:?}", ptr, e);
+                    MemoryError::from(e)
+                })?;
+            }
+            #[cfg(not(gpu_vendor_amd))]
+            {
+                check(unsafe { cudaFreeAsync(ptr, record.stream.as_raw()) }).map_err(|e| {
+                    tracing::error!("cudaFreeAsync failed: ptr={:p}: {:?}", ptr, e);
+                    MemoryError::from(e)
+                })?;
+            }
             Ok(record.stream)
         } else {
             let (freed_size, guard) = self.pool.free_internal(ptr)?;
@@ -157,6 +187,97 @@ pub fn d_malloc_on(size: usize, stream: &StreamGuard) -> Result<*mut c_void, Mem
     let manager = MEMORY_MANAGER.get().unwrap();
     let mut manager = manager.lock().map_err(|_| MemoryError::LockError)?;
     manager.d_malloc_on(size, stream)
+}
+
+/// Release all free (unallocated) VPMM pages back to the OS/driver.
+///
+/// On NVIDIA: always enabled — the driver handles VA remapping correctly.
+///
+/// On AMD (RDNA): disabled by default because the virtually-tagged L1
+/// cache can serve stale data if the same VA is re-backed with a new
+/// physical page. Use [`force_release_free_pages`] after proving stages
+/// where the device is synchronized and no stale buffers will be accessed.
+pub fn release_free_pages() {
+    #[cfg(gpu_vendor_amd)]
+    {
+        tracing::debug!("release_free_pages: skipped on AMD (RDNA L1 coherence)");
+    }
+    #[cfg(not(gpu_vendor_amd))]
+    {
+        do_release_free_pages();
+    }
+}
+
+/// Release all free VPMM pages, including on AMD.
+///
+/// Safe after device synchronization when all GPU work is finished and
+/// results are on CPU. The next allocation will re-map pages on demand.
+pub fn force_release_free_pages() {
+    do_release_free_pages();
+}
+
+fn do_release_free_pages() {
+    let Some(manager) = MEMORY_MANAGER.get() else {
+        return;
+    };
+    let Ok(mut manager) = manager.lock() else {
+        tracing::warn!("release_free_pages: failed to acquire lock");
+        return;
+    };
+    let freed = manager.pool.release_free_pages();
+    if freed > 0 {
+        tracing::info!("Released {} of free GPU pages", ByteSize::b(freed as u64));
+    }
+}
+
+/// Release all VPMM resources and reinitialize the pool.
+///
+/// Frees tracked small allocations (`hipFree`), drops the VPMM pool
+/// (which calls `vpmm_unmap` + `vpmm_release` on all active pages and
+/// `vpmm_release_va` on VA reservations), then creates a fresh pool with
+/// new VA reservations. All physical GPU memory returns to the driver.
+///
+/// The fresh pool gets completely new VAs from `vpmm_reserve()`, so there
+/// is no VA reuse and no AMD RDNA L1 cache coherence concern.
+///
+/// Does NOT call `hipDeviceReset()` — that would invalidate GPU state
+/// held by other libraries (e.g. halo2-gpu kernel modules loaded via
+/// `hipModuleLoadData` into static variables) and cause segfaults.
+pub fn release_and_reinit_pool() {
+    let Some(manager) = MEMORY_MANAGER.get() else {
+        return;
+    };
+    let Ok(mut manager) = manager.lock() else {
+        tracing::warn!("release_and_reinit_pool: failed to acquire lock");
+        return;
+    };
+
+    crate::stream::device_synchronize().ok();
+
+    let records: Vec<(*mut c_void, AllocRecord)> = manager
+        .allocated_ptrs
+        .drain()
+        .map(|(nn, rec)| (nn.as_ptr(), rec))
+        .collect();
+    for (ptr, record) in records {
+        #[cfg(gpu_vendor_amd)]
+        {
+            let _ = &record;
+            unsafe { cudaFree(ptr) };
+        }
+        #[cfg(not(gpu_vendor_amd))]
+        unsafe {
+            cudaFreeAsync(ptr, record.stream.as_raw());
+        }
+    }
+    manager.current_size = 0;
+    manager.max_used_size = 0;
+
+    let old_pool = std::mem::replace(&mut manager.pool, VirtualMemoryPool::empty());
+    drop(old_pool);
+
+    manager.pool = VirtualMemoryPool::default();
+    tracing::info!("VPMM pool released and reinitialized");
 }
 
 /// # Safety

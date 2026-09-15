@@ -264,6 +264,9 @@ inline std::pair<dim3, dim3> eval_constraints_launch_params(
     size_t max_threads_per_block
 ) {
     auto threads_per_block = std::min(std::max(WARP_SIZE, (size_t)num_y), max_threads_per_block);
+    // Round to WARP_SIZE multiple: on AMD, __shfl_down from inactive lanes in a
+    // partial warp returns stale data, corrupting warp_reduce_sum.
+    threads_per_block = ((threads_per_block + WARP_SIZE - 1) / WARP_SIZE) * WARP_SIZE;
     auto num_blocks_for_y = div_ceil(num_y, threads_per_block);
     dim3 grid = dim3(num_blocks_for_y, num_x);
     dim3 block = dim3(threads_per_block);

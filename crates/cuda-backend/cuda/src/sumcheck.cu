@@ -8,6 +8,11 @@
 #include <utility>
 #include <vector_types.h>
 
+// Register-heavy kernels use the unified GPU_REGISTER_HEAVY macro from
+// launcher.cuh. On AMD RDNA3/4: allows more VGPRs per wave, reducing spills.
+// On NVIDIA: limits occupancy to 2 blocks/SM for more registers per block.
+#define SUMCHECK_KERNEL_ATTRS GPU_REGISTER_HEAVY
+
 namespace plain_sumcheck {
 
 // Reduces evaluations over x and column dimensions for PLE round 0
@@ -52,6 +57,7 @@ __global__ void reduce_over_x_and_cols_kernel(
 // Template parameter WD: Number of output polynomials (typically 1)
 // NOTE: This implements identity W function. For custom W, modify accumulation section.
 template <int WD>
+SUMCHECK_KERNEL_ATTRS
 __global__ void sumcheck_mle_round_kernel(
     const uintptr_t *input_matrices,
     FpExt *block_sums, // Output: [gridDim.x][d][WD] partial sums
@@ -79,30 +85,26 @@ __global__ void sumcheck_mle_round_kernel(
     for (int y = blockIdx.x * blockDim.x + threadIdx.x; y < half_height;
          y += gridDim.x * blockDim.x) {
 
-        // For each evaluation point X in {1, 2, ..., d}
-        for (uint32_t x_int = 1; x_int <= d; x_int++) {
-            FpExt X = FpExt(Fp(x_int));
+        for (int mat_idx = 0; mat_idx < num_matrices; mat_idx++) {
+            const FpExt *input = reinterpret_cast<const FpExt *>(input_matrices[mat_idx]);
+            int width = widths[mat_idx];
 
-            // For identity W: we simply sum all matrix column evaluations
-            // For each matrix
-            for (int mat_idx = 0; mat_idx < num_matrices; mat_idx++) {
-                const FpExt *input = reinterpret_cast<const FpExt *>(input_matrices[mat_idx]);
-                int width = widths[mat_idx];
+            for (int col = 0; col < width; col++) {
+                int col_offset = col * height;
+                int idx_0 = col_offset + (y << 1);
+                int idx_1 = col_offset + (y << 1) + 1;
 
-                // For each column
-                for (int col = 0; col < width; col++) {
-                    int col_offset = col * height;
-                    int idx_0 = col_offset + (y << 1);
-                    int idx_1 = col_offset + (y << 1) + 1;
+                FpExt eval_0 = input[idx_0];
+                FpExt eval_1 = input[idx_1];
+                FpExt diff = eval_1 - eval_0;
 
-                    FpExt eval_0 = input[idx_0];
-                    FpExt eval_1 = input[idx_1];
-
-                    FpExt eval_X = eval_0 + X * (eval_1 - eval_0);
-
-                    // For identity W and WD=1: accumulate directly
-                    // TODO: When implementing custom W, replace this section
-                    local_sums[(x_int - 1) * WD + 0] += eval_X;
+                // Horner accumulation: running = eval_0 + k*diff after k iterations.
+                // Replaces d FpExt-by-Fp multiplications with d FpExt additions.
+                // Algebraically identical: Fp(k)*diff = diff+...+diff (k times) in exact arithmetic.
+                FpExt running = eval_0;
+                for (uint32_t x_int = 1; x_int <= d; x_int++) {
+                    running += diff;
+                    local_sums[(x_int - 1) * WD + 0] += running;
                 }
             }
         }

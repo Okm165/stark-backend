@@ -44,7 +44,7 @@ type Digest = [Bn254Scalar; 1];
 /// };
 /// ```
 #[repr(C)]
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct DeviceBn254SpongeState {
     pub sponge_state: [[u64; 4]; 3], // 96 bytes
     pub absorb_idx: u32,             // 4 bytes
@@ -127,6 +127,21 @@ impl MultiFieldTranscriptGpu {
         Self::default()
     }
 
+    /// Build a `DeviceBn254SpongeState` from the current CPU transcript state.
+    pub fn snapshot_sponge_state(&self) -> DeviceBn254SpongeState {
+        let mut ds = DeviceBn254SpongeState::default();
+        for (i, &s) in self.inner.sponge_state().iter().enumerate() {
+            ds.sponge_state[i] = bn254_scalar_to_raw(s);
+        }
+        ds.absorb_idx = self.inner.absorb_idx() as u32;
+        ds.sample_idx = self.inner.sample_idx() as u32;
+        for (i, &bb) in self.inner.observe_buf().iter().enumerate() {
+            ds.observe_buf[i] = bb.as_canonical_u32();
+        }
+        ds.observe_buf_len = self.inner.observe_buf().len() as u32;
+        ds
+    }
+
     fn ensure_device_allocated(&mut self, device_ctx: &GpuDeviceCtx) {
         if self.device.is_empty() {
             self.device = DeviceBuffer::with_capacity_on(1, device_ctx);
@@ -146,20 +161,7 @@ impl MultiFieldTranscriptGpu {
     pub fn sync_h2d(&mut self, device_ctx: &GpuDeviceCtx) -> Result<(), MemCopyError> {
         self.ensure_device_allocated(device_ctx);
 
-        let mut ds = DeviceBn254SpongeState::default();
-
-        // Sponge state
-        for (i, &s) in self.inner.sponge_state().iter().enumerate() {
-            ds.sponge_state[i] = bn254_scalar_to_raw(s);
-        }
-        ds.absorb_idx = self.inner.absorb_idx() as u32;
-        ds.sample_idx = self.inner.sample_idx() as u32;
-
-        // Observe buffer
-        for (i, &bb) in self.inner.observe_buf().iter().enumerate() {
-            ds.observe_buf[i] = bb.as_canonical_u32();
-        }
-        ds.observe_buf_len = self.inner.observe_buf().len() as u32;
+        let ds = self.snapshot_sponge_state();
 
         unsafe {
             cuda_memcpy_on::<false, true>(
@@ -200,27 +202,32 @@ impl GpuFiatShamirTranscript<BabyBearBn254Poseidon2Config> for MultiFieldTranscr
         device_ctx: &GpuDeviceCtx,
     ) -> Result<BabyBear, GrindError> {
         validate_gpu_grind_bits(bits)?;
-        // Trivial case: 0 bits mean no PoW is required and any witness is valid.
         if bits == 0 {
             return Ok(BabyBear::ZERO);
         }
 
-        // 1. Sync host state to device.
         self.sync_h2d(device_ctx)?;
 
-        // 2. Run the BN254 grinding kernel.
+        let max_witness = BabyBear::ORDER_U32 - 1;
         let witness_u32 = unsafe {
             crate::cuda::bn254_merkle_tree::bn254_sponge_grind(
                 self.device.as_ptr(),
                 bits as u32,
-                BabyBear::ORDER_U32 - 1,
+                max_witness,
                 device_ctx,
             )?
         };
 
         let witness = BabyBear::from_u32(witness_u32);
 
-        // 3. Update host state: observe witness + consume one sample.
+        if !FiatShamirTranscript::<BabyBearBn254Poseidon2Config>::check_witness(
+            &mut self.inner.clone(),
+            bits,
+            witness,
+        ) {
+            return Err(GrindError::InvalidWitness);
+        }
+
         FiatShamirTranscript::<BabyBearBn254Poseidon2Config>::observe(&mut self.inner, witness);
         let _ = FiatShamirTranscript::<BabyBearBn254Poseidon2Config>::sample(&mut self.inner);
 
@@ -273,5 +280,39 @@ mod tests {
                 "CUDA witness {witness:?} invalid on CPU (observed {num_observed} values, witness_bits {witness_bits})"
             );
         }
+    }
+
+    #[test]
+    fn test_grind_gpu_15bit_timing() {
+        let ctx = GpuDeviceCtx::for_device(get_device().unwrap() as u32).unwrap();
+
+        // Warmup: first kernel launch triggers JIT compilation
+        {
+            let mut gpu = MultiFieldTranscriptGpu::new();
+            let _ = gpu.grind_gpu(8, &ctx);
+        }
+
+        // Test correctness and timing at 15 bits
+        let bits = 15;
+        let mut gpu = MultiFieldTranscriptGpu::new();
+        for i in 0..20u32 {
+            let val = BabyBear::from_u32(i.wrapping_mul(37).wrapping_add(100));
+            FiatShamirTranscript::<BabyBearBn254Poseidon2Config>::observe(&mut gpu, val);
+        }
+
+        let start = std::time::Instant::now();
+        let witness = gpu
+            .grind_gpu(bits, &ctx)
+            .unwrap_or_else(|e| panic!("grind_gpu failed at {bits} bits: {e:?}"));
+        let elapsed = start.elapsed();
+        eprintln!(
+            "BN254 grind: bits={bits}, witness={}, elapsed={:?}",
+            witness.as_canonical_u32(),
+            elapsed
+        );
+        assert!(
+            elapsed.as_secs() < 5,
+            "15-bit grind took {elapsed:?} — expected < 5s (stride loop bug?)"
+        );
     }
 }

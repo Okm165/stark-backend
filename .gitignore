@@ -17,6 +17,7 @@ rustc-*
 
 # IDE directories
 .vscode/
+.cursor/
 .zed/
 
 __pycache__/

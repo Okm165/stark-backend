@@ -15,11 +15,6 @@ use crate::{
     stream::{device_synchronize, CudaEvent, CudaStream, StreamGuard},
 };
 
-#[link(name = "cudart")]
-extern "C" {
-    fn cudaMemGetInfo(free_bytes: *mut usize, total_bytes: *mut usize) -> i32;
-}
-
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -104,6 +99,16 @@ impl VpmmRecord {
 // Pool Implementation
 // ============================================================================
 
+/// Iterate page-aligned addresses within a region.
+fn page_addrs(
+    base: CUdeviceptr,
+    size: usize,
+    page_size: usize,
+) -> impl Iterator<Item = CUdeviceptr> {
+    let num_pages = size / page_size;
+    (0..num_pages).map(move |i| base + (i * page_size) as u64)
+}
+
 /// Metadata for a free region in the virtual address space.
 #[derive(Debug, Clone)]
 struct FreeRegionMeta {
@@ -161,16 +166,38 @@ unsafe impl Send for VirtualMemoryPool {}
 unsafe impl Sync for VirtualMemoryPool {}
 
 impl VirtualMemoryPool {
+    /// Creates an empty pool with no VA reservations — placeholder for
+    /// `std::mem::replace` before proper Drop of the old pool.
+    pub(super) fn empty() -> Self {
+        Self {
+            roots: Vec::new(),
+            active_pages: HashMap::new(),
+            free_regions: BTreeMap::new(),
+            malloc_regions: HashMap::new(),
+            unmapped_regions: BTreeMap::new(),
+            zombie_regions: Vec::new(),
+            free_num: 0,
+            page_size: usize::MAX,
+            va_size: 0,
+            device_id: 0,
+        }
+    }
+
     pub(super) fn new(config: VpmmConfig) -> Self {
         let device_id = set_device().unwrap();
 
-        // Check VPMM support and resolve page_size
+        // Check VPMM support and resolve page_size.
         let (root, page_size, va_size) = unsafe {
             match vpmm_check_support(device_id) {
                 Ok(_) => {
                     let granularity = vpmm_min_granularity(device_id).unwrap();
 
-                    // Resolve page_size: use config override or device granularity
+                    // Resolve page_size: use config override, or a sensible default.
+                    // Some devices (e.g. AMD/ROCm) report a very small minimum
+                    // granularity (4 KB). Using that directly would require millions
+                    // of hipMemCreate/hipMemMap calls for multi-GB allocations,
+                    // taking minutes. We clamp to at least 2 MB by default.
+                    const MIN_DEFAULT_PAGE_SIZE: usize = 2 << 20; // 2 MiB
                     let page_size = match config.page_size {
                         Some(size) => {
                             assert!(
@@ -180,7 +207,16 @@ impl VirtualMemoryPool {
                             );
                             size
                         }
-                        None => granularity,
+                        None => {
+                            let clamped = MIN_DEFAULT_PAGE_SIZE.max(granularity);
+                            let clamped = clamped.next_multiple_of(granularity);
+                            tracing::debug!(
+                                "VPMM: device granularity={}, using page_size={}",
+                                ByteSize::b(granularity as u64),
+                                ByteSize::b(clamped as u64),
+                            );
+                            clamped
+                        }
                     };
 
                     // Validate va_size
@@ -229,11 +265,7 @@ impl VirtualMemoryPool {
             let alloc_size = config.initial_pages * page_size;
             let init_stream = StreamGuard::new(CudaStream::new_non_blocking().unwrap());
             if let Err(e) = pool.defragment_or_create_new_pages(alloc_size, &init_stream) {
-                let mut free_mem = 0usize;
-                let mut total_mem = 0usize;
-                unsafe {
-                    cudaMemGetInfo(&mut free_mem, &mut total_mem);
-                }
+                let (free_mem, total_mem) = gpu_mem_info();
                 panic!(
                     "VPMM preallocation failed: {:?}\n\
                      Config: pages={}, page_size={}\n\
@@ -566,10 +598,16 @@ impl VirtualMemoryPool {
 
         // Find a best fit unmapped region
         let dst = self.take_unmapped_region(requested)?;
-        // Sentinel value until we have a valid free region pointer from allocation
-        let mut allocated_ptr = CUdeviceptr::MAX;
+        let mut allocated_ptr: Option<CUdeviceptr> = None;
 
         let mut allocated_dst = dst;
+        // AMD RDNA: the defrag path below double-maps physical pages to new
+        // VAs.  RDNA L1 caches are virtually tagged, so two VAs pointing to
+        // the same physical page cause incoherent reads (AMD HIP VMM docs).
+        // Skip free-region reuse and allocate all pages fresh instead.
+        #[cfg(gpu_vendor_amd)]
+        let mut allocate_size = requested;
+        #[cfg(not(gpu_vendor_amd))]
         let mut allocate_size = requested.saturating_sub(total_free_size);
         debug_assert_eq!(allocate_size % self.page_size, 0);
         let mut allocated_pages: Vec<(CUdeviceptr, CUmemGenericAllocationHandle)> = Vec::new();
@@ -633,27 +671,25 @@ impl VirtualMemoryPool {
             }
             let (merged_ptr, merged_size) = self.free_region_insert(dst, allocate_size, stream);
             debug_assert!(merged_size >= allocate_size);
-            allocated_ptr = merged_ptr;
+            allocated_ptr = Some(merged_ptr);
             allocate_size = merged_size;
         }
 
         let mut remaining = requested.saturating_sub(allocate_size);
         if remaining == 0 {
-            debug_assert_ne!(
-                allocated_ptr,
-                CUdeviceptr::MAX,
-                "Allocation returned no valid free region"
-            );
-            return Ok(Some(allocated_ptr));
+            return Ok(allocated_ptr.or_else(|| {
+                debug_assert!(false, "Allocation returned no valid free region");
+                None
+            }));
         }
-        debug_assert!(allocate_size == 0 || allocated_ptr <= dst);
+        debug_assert!(allocate_size == 0 || allocated_ptr.unwrap() <= dst);
 
         // Pull free regions; prefer same stream, then oldest-first for other streams
         let mut to_defrag: Vec<(CUdeviceptr, usize)> = Vec::new();
         let mut ordered_free_regions: Vec<_> = self
             .free_regions
             .iter()
-            .filter(|(&addr, _)| allocate_size == 0 || addr != allocated_ptr)
+            .filter(|(&addr, _)| allocate_size == 0 || Some(addr) != allocated_ptr)
             .map(|(&addr, region)| (region.stream != *stream, region.id, addr))
             .collect();
         ordered_free_regions.sort_by_key(|(is_other, id, _)| (*is_other, *id));
@@ -690,14 +726,22 @@ impl VirtualMemoryPool {
             }
         }
         let remapped_ptr = self.remap_regions(to_defrag, allocated_dst, stream)?;
-        let result = std::cmp::min(allocated_ptr, remapped_ptr);
-        debug_assert!(allocate_size == 0 || allocated_ptr == remapped_ptr);
-        debug_assert_ne!(
-            result,
-            CUdeviceptr::MAX,
-            "Both allocation and remapping returned no valid free region"
-        );
-        Ok(Some(result))
+        let result = match (allocated_ptr, remapped_ptr) {
+            (Some(a), Some(r)) => {
+                debug_assert!(allocate_size == 0 || a == r);
+                Some(std::cmp::min(a, r))
+            }
+            (Some(a), None) => Some(a),
+            (None, Some(r)) => Some(r),
+            (None, None) => {
+                debug_assert!(
+                    false,
+                    "Both allocation and remapping returned no valid free region"
+                );
+                None
+            }
+        };
+        Ok(result)
     }
 
     fn remap_regions(
@@ -705,9 +749,9 @@ impl VirtualMemoryPool {
         regions: Vec<(CUdeviceptr, usize)>,
         dst: CUdeviceptr,
         stream: &StreamGuard,
-    ) -> Result<CUdeviceptr, MemoryError> {
+    ) -> Result<Option<CUdeviceptr>, MemoryError> {
         if regions.is_empty() {
-            return Ok(CUdeviceptr::MAX);
+            return Ok(None);
         }
 
         let bytes_to_remap = regions.iter().map(|(_, size)| *size).sum::<usize>();
@@ -719,9 +763,7 @@ impl VirtualMemoryPool {
 
         let mut curr_dst = dst;
         for (region_addr, region_size) in regions {
-            let num_pages = region_size / self.page_size;
-            for i in 0..num_pages {
-                let page = region_addr + (i * self.page_size) as u64;
+            for page in page_addrs(region_addr, region_size, self.page_size) {
                 let handle = self
                     .active_pages
                     .remove(&page)
@@ -758,12 +800,53 @@ impl VirtualMemoryPool {
             })?;
         }
         let (remapped_ptr, _) = self.free_region_insert(dst, bytes_to_remap, stream);
-        Ok(remapped_ptr)
+        Ok(Some(remapped_ptr))
     }
 
     /// Returns the total physical memory currently mapped in this pool (in bytes).
     pub(super) fn memory_usage(&self) -> usize {
         self.active_pages.len() * self.page_size
+    }
+
+    /// Unmap and release physical pages that belong to free (unused) regions.
+    ///
+    /// Returns the total number of bytes released. The virtual addresses are moved
+    /// to `unmapped_regions` so they can be re-backed by fresh pages on the next
+    /// allocation.
+    #[cfg_attr(gpu_vendor_amd, allow(dead_code))]
+    pub(super) fn release_free_pages(&mut self) -> usize {
+        device_synchronize().unwrap();
+
+        let mut total_freed: usize = 0;
+        let free_entries: Vec<(CUdeviceptr, usize)> = self
+            .free_regions
+            .iter()
+            .map(|(&ptr, meta)| (ptr, meta.size))
+            .collect();
+
+        for (region_ptr, region_size) in free_entries {
+            for page_addr in page_addrs(region_ptr, region_size, self.page_size) {
+                if let Some(handle) = self.active_pages.remove(&page_addr) {
+                    if let Err(e) = unsafe { vpmm_unmap(page_addr, self.page_size) } {
+                        tracing::error!(
+                            "release_free_pages: vpmm_unmap failed at {:#x}: {:?}",
+                            page_addr,
+                            e
+                        );
+                        self.active_pages.insert(page_addr, handle);
+                        continue;
+                    }
+                    if let Err(e) = unsafe { vpmm_release(handle) } {
+                        tracing::error!("release_free_pages: vpmm_release failed: {:?}", e);
+                    }
+                    total_freed += self.page_size;
+                }
+            }
+            self.insert_unmapped_region(region_ptr, region_size);
+        }
+
+        self.free_regions.clear();
+        total_freed
     }
 }
 
@@ -852,6 +935,7 @@ impl std::fmt::Debug for VirtualMemoryPool {
 }
 
 #[cfg(test)]
+#[cfg(not(gpu_vendor_amd))]
 mod tests {
     use std::sync::Arc;
 

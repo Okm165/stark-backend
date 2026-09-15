@@ -283,8 +283,16 @@ __global__ void logup_r0_ntt_eval_interactions_kernel(
         FpExt numer_results[NUM_COSETS];
         FpExt denom_results[NUM_COSETS];
         acc_interactions<NUM_COSETS, NEEDS_SHMEM, /*FIRST_COSET_IS_IDENTITY=*/true>(
-            eval_ctx, is_first, is_last, x_int,
-            numer_weights, denom_weights, d_rules, rules_len, numer_results, denom_results
+            eval_ctx,
+            is_first,
+            is_last,
+            x_int,
+            numer_weights,
+            denom_weights,
+            d_rules,
+            rules_len,
+            numer_results,
+            denom_results
         );
 
         FpExt eq = eq_cube[x_int];

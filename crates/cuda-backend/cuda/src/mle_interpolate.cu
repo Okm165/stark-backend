@@ -222,10 +222,16 @@ __global__ void mle_interpolate_shared_2d_kernel(
 // ============================================================================
 
 template <typename Field, bool EvalToCoeff>
-int launch_mle_interpolate_stage(Field *buffer, size_t buffer_len, uint32_t step, cudaStream_t stream) {
+int launch_mle_interpolate_stage(
+    Field *buffer,
+    size_t buffer_len,
+    uint32_t step,
+    cudaStream_t stream
+) {
     size_t total_pairs = buffer_len >> 1;
     auto [grid, block] = kernel_launch_params(total_pairs);
-    mle_interpolate_stage_kernel<Field, EvalToCoeff><<<grid, block, 0, stream>>>(buffer, total_pairs, step);
+    mle_interpolate_stage_kernel<Field, EvalToCoeff>
+        <<<grid, block, 0, stream>>>(buffer, total_pairs, step);
     return CHECK_KERNEL();
 }
 

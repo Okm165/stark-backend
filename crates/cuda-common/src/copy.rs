@@ -18,8 +18,8 @@ pub enum cudaMemcpyKind {
     cudaMemcpyDefault = 4,
 }
 
-#[link(name = "cudart")]
-extern "C" {
+crate::gpu_link! {
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipMemcpyAsync")]
     fn cudaMemcpyAsync(
         dst: *mut c_void,
         src: *const c_void,

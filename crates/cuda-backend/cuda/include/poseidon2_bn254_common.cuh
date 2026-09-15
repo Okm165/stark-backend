@@ -51,14 +51,14 @@ __device__ __constant__ static const uint64_t BN254_P[4] = {
 // value as BN254_P (in poseidon2_bn254_common.cuh) — just split into 32-bit
 // halves: each adjacent pair (lo, hi) is one u64 limb of BN254_P.
 __device__ __constant__ static const uint32_t BN254_P_32[8] = {
-    4026531841u, 
-    1138881939u, 
-    2042196113u, 
-    674490440u,  
-    2172737629u, 
-    3092268470u, 
-    3778125865u, 
-    811880050u,  
+    4026531841u,
+    1138881939u,
+    2042196113u,
+    674490440u,
+    2172737629u,
+    3092268470u,
+    3778125865u,
+    811880050u,
 };
 
 // MU = P^{-1} mod 2^64  (used in Montgomery reduction)

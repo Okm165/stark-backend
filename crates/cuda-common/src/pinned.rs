@@ -42,9 +42,10 @@ use crate::{
     stream::{device_synchronize, CudaEvent, CudaStream},
 };
 
-#[link(name = "cudart")]
-extern "C" {
+crate::gpu_link! {
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipHostRegister")]
     fn cudaHostRegister(ptr: *mut c_void, size: usize, flags: u32) -> i32;
+    #[cfg_attr(gpu_vendor_amd, link_name = "hipHostUnregister")]
     fn cudaHostUnregister(ptr: *mut c_void) -> i32;
 }
 

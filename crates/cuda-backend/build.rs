@@ -1,8 +1,10 @@
 use std::process::exit;
 
-use openvm_cuda_builder::{cuda_available, CudaBuilder};
+use openvm_cuda_builder::{cuda_available, emit_gpu_vendor_cfg, CudaBuilder};
 
 fn main() {
+    println!("cargo::rustc-check-cfg=cfg(gpu_vendor_amd)");
+    emit_gpu_vendor_cfg();
     if !cuda_available() {
         eprintln!("cargo:warning=CUDA is not available");
         exit(1);
@@ -20,7 +22,18 @@ fn main() {
         .clone()
         .library_name("cuda-backend")
         .watch("cuda")
-        .include("cuda/include");
+        .include("cuda/include")
+        // Isolate BN254 translation units into their own device-link group.
+        // This prevents hipcc's interprocedural optimizer from affecting
+        // unrelated kernels (logup_gkr, stacked_reduction) when BN254 code changes.
+        .device_link_group(
+            "bn254",
+            &[
+                "bn254_constants.cu",
+                "bn254_poseidon2_grind.cu",
+                "bn254_poseidon2_row_hash.cu",
+            ],
+        );
 
     // Collect .cu files, excluding bn254_* functionality unless the feature is enabled.
     let bn254_enabled = std::env::var("CARGO_FEATURE_BABY_BEAR_BN254_POSEIDON2").is_ok();

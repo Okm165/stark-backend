@@ -334,7 +334,6 @@ where
                     device_ctx,
                 );
             }
-
             let g_tree = MerkleTreeGpu::<F, HS::Digest>::new_with_hash::<HS::MerkleHash>(
                 DeviceMatrix::new(Arc::new(g_rs), codeword_height, D_EF),
                 1 << k_whir,

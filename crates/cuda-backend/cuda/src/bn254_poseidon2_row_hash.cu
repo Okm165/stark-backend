@@ -20,6 +20,12 @@
 #include "poseidon2_bn254_b32.cuh" // bn254_b32::*
 #include <cstdint>
 
+#if defined(__HIPCC__)
+static constexpr int ROW_HASH_THREADS = 256;
+#else
+static constexpr int ROW_HASH_THREADS = 512;
+#endif
+
 // ---------------------------------------------------------------------------
 // Round constant device memory.
 //
@@ -41,8 +47,9 @@ extern __device__ __constant__ Bn254Fr g_terminal_rc[4][3];
 
 // b32 Poseidon2 permutation impl (parameterized over WIDTH/HALF_F/ROUNDS_P).
 // Built on bn254_b32::bn254_add / bn254_sbox / bn254_mds_external /
-// bn254_mds_internal — all of which lower to IMAD.WIDE / IADD3.X chains via
-// inline PTX.
+// bn254_mds_internal — which compile to:
+//   NVIDIA: explicit PTX carry chains (add.cc, mad.hi.cc)
+//   AMD:    GCN v_add_co_u32 chains + v_mad_u64_u32 (compiler-generated)
 template <int WIDTH, int HALF_F, int ROUNDS_P>
 static __device__ void bn254_poseidon2_permute_impl_b32(
     Bn254Fr32 state[WIDTH],
@@ -97,7 +104,6 @@ static __device__ void bn254_poseidon2_permute_w2_b32(Bn254Fr32 state[2]) {
         (Bn254Fr32 *)g_terminal_rc_w2
     );
 }
-
 
 /// b32 mirror of bn254_row_hash. Uses bn254_b32::bn254_pack_base_2_31 and the
 /// b32 width-3 permutation. The 16-u32 sponge `buf` lives in shared memory
@@ -258,7 +264,10 @@ __global__ void bn254_adjacent_compress_layer_kernel(
 }
 
 template <int NThreads>
-__global__ __launch_bounds__(NThreads) void bn254_compressing_row_hashes_kernel_v3(
+#if defined(__HIPCC__)
+__attribute__((amdgpu_flat_work_group_size(NThreads, NThreads)))
+#endif
+__global__ __launch_bounds__(NThreads, 2) void bn254_compressing_row_hashes_kernel_v3(
     Bn254Fr32 *out,
     const Fp *matrix,
     size_t width,
@@ -321,7 +330,10 @@ __global__ __launch_bounds__(NThreads) void bn254_compressing_row_hashes_kernel_
 // b32 mirror of the ext row-hash kernel — same structure as v3 (F-field) but
 // uses bn254_row_hash_ext_b32, which iterates over FpExt rows.
 template <int NThreads>
-__global__ __launch_bounds__(NThreads) void bn254_compressing_row_hashes_ext_kernel_v3(
+#if defined(__HIPCC__)
+__attribute__((amdgpu_flat_work_group_size(NThreads, NThreads)))
+#endif
+__global__ __launch_bounds__(NThreads, 2) void bn254_compressing_row_hashes_ext_kernel_v3(
     bn254_digest_t *out,
     const FpExt *matrix,
     size_t width,
@@ -384,8 +396,9 @@ extern "C" int _bn254_poseidon2_adjacent_compress_layer(
 // 5 instantiations of the v3 kernel (LogRowsPerQuery ∈ {0, 1, 2, 3, 4}). The
 // kernel's tree-reduction loop is bounded by that template parameter, so it
 // must match the runtime block.y = (1 << log_rows_per_query) — every other
-// caller knob (block.x, total threads = 512, static shared = 32 KB) is the
-// same across the four instantiations.
+// caller knob (block.x, total threads = ROW_HASH_THREADS, static shared) is
+// the same across the four instantiations.
+// On HIP, ROW_HASH_THREADS=256; Rust caps log_rows_per_query to 8 on AMD.
 
 extern "C" int _bn254_poseidon2_compressing_row_hashes(
     bn254_digest_t *out,
@@ -400,13 +413,14 @@ extern "C" int _bn254_poseidon2_compressing_row_hashes(
         return cudaErrorInvalidValue;
     }
     size_t block_y = size_t{1} << log_rows_per_query;
-    size_t threads_x = std::max<size_t>(1, size_t{512} / block_y);
+    size_t threads_x = std::max<size_t>(1, size_t(ROW_HASH_THREADS) / block_y);
     auto [grid, block] = kernel_launch_params(query_stride, threads_x);
     block.y = block_y;
     auto height = query_stride << log_rows_per_query;
 
-    bn254_compressing_row_hashes_kernel_v3<512>
-        <<<grid, block, 0, stream>>>((Bn254Fr32 *)out, matrix, width, height, query_stride, log_rows_per_query);
+    bn254_compressing_row_hashes_kernel_v3<ROW_HASH_THREADS><<<grid, block, 0, stream>>>(
+        (Bn254Fr32 *)out, matrix, width, height, query_stride, log_rows_per_query
+    );
     return CHECK_KERNEL();
 }
 
@@ -422,12 +436,12 @@ extern "C" int _bn254_poseidon2_compressing_row_hashes_ext(
         return cudaErrorInvalidValue;
     }
     size_t block_y = size_t{1} << log_rows_per_query;
-    size_t threads_x = std::max<size_t>(1, size_t{512} / block_y);
+    size_t threads_x = std::max<size_t>(1, size_t(ROW_HASH_THREADS) / block_y);
     auto [grid, block] = kernel_launch_params(query_stride, threads_x);
     block.y = block_y;
     auto height = query_stride << log_rows_per_query;
 
-    bn254_compressing_row_hashes_ext_kernel_v3<512>
+    bn254_compressing_row_hashes_ext_kernel_v3<ROW_HASH_THREADS>
         <<<grid, block, 0, stream>>>(out, matrix, width, height, query_stride, log_rows_per_query);
     return CHECK_KERNEL();
 }

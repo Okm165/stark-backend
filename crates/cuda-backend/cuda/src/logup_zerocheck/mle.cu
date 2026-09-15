@@ -372,7 +372,9 @@ extern "C" int _zerocheck_eval_mle(
     uint32_t buffer_size,
     FpExt *intermediates,
     uint32_t num_y,
-    uint32_t num_x, cudaStream_t stream) {
+    uint32_t num_x,
+    cudaStream_t stream
+) {
     if (!valid_grid_y_dim(num_x)) {
         return cudaErrorInvalidValue;
     }
@@ -438,7 +440,9 @@ extern "C" int _logup_eval_mle(
     uint32_t buffer_size,
     FpExt *intermediates,
     uint32_t num_y,
-    uint32_t num_x, cudaStream_t stream) {
+    uint32_t num_x,
+    cudaStream_t stream
+) {
     if (!valid_grid_y_dim(num_x)) {
         return cudaErrorInvalidValue;
     }

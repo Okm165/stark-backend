@@ -124,7 +124,9 @@ extern "C" int _prefix_scan_block_ext(
     FpExt *d_inout,
     uint64_t length,
     uint64_t round_stride,
-    uint64_t block_num, cudaStream_t stream) {
+    uint64_t block_num,
+    cudaStream_t stream
+) {
     prefix_scan_block_ext<<<block_num, SHARED_DATA, 0, stream>>>(d_inout, length, round_stride);
     return CHECK_KERNEL();
 }
@@ -132,7 +134,9 @@ extern "C" int _prefix_scan_block_ext(
 extern "C" int _prefix_scan_block_downsweep_ext(
     FpExt *d_inout,
     uint64_t length,
-    uint64_t round_stride, cudaStream_t stream) {
+    uint64_t round_stride,
+    cudaStream_t stream
+) {
     auto element_per_block = ACC_PER_THREAD * SHARED_DATA;
     auto low_level_round_stride = round_stride / element_per_block;
     auto node_num = div_ceil(length, low_level_round_stride);

@@ -17,9 +17,13 @@
 #ifndef __SPPARK_FF_KOALA_BEAR_HPP__
 #define __SPPARK_FF_KOALA_BEAR_HPP__
 
-#ifdef __CUDACC__
+#if defined(__CUDACC__) || defined(__HIPCC__)
 # include <cassert>
-# include "ff/mont32_t.cuh"
+# ifdef __CUDACC__
+#  include "ff/mont32_t.cuh"
+# else
+#  include "ff/mont32_t.hip"
+# endif
 # define inline __device__ __forceinline__
 
 using kb31_base = mont32_t<31, 0x7F000001, 0x7EFFFFFF, 0x17F7EFE4, 0x01FFFFFE>;
@@ -121,6 +125,6 @@ struct kb31_t : public kb31_base {
 };
 
 # undef inline
-#endif // __CUDACC__
+#endif // __CUDACC__ || __HIPCC__
 
 #endif // __SPPARK_FF_KOALA_BEAR_HPP__

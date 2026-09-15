@@ -1,4 +1,4 @@
-//! Rust bindings for CUDA sponge grinding kernel.
+//! Rust bindings for CUDA/HIP sponge grinding kernel (BabyBear Poseidon2).
 
 use openvm_cuda_common::{
     copy::{MemCopyD2H, MemCopyH2D},
@@ -22,13 +22,8 @@ extern "C" {
 
 /// Launch the GPU grinding kernel to find a PoW witness.
 ///
-/// # Arguments
-/// * `init_state` - Pointer to the initial sponge state on device
-/// * `bits` - Number of bits that must be zero in the sampled value
-/// * `max_witness` - Maximum witness value to search (typically F::ORDER - 1)
-///
-/// # Returns
-/// The witness value that satisfies the PoW requirement, or an error.
+/// Searches the full witness space `[0, max_witness]` in batches of `2^bits`.
+/// Each kernel invocation checks one candidate per GPU thread.
 ///
 /// # Safety
 /// - `init_state` must point to valid device memory containing a `DeviceSpongeState`
@@ -41,7 +36,10 @@ pub unsafe fn sponge_grind(
     validate_gpu_grind_bits(bits as usize)?;
     let mut d_result = DeviceBuffer::with_capacity_on(1, device_ctx);
     [u32::MAX].copy_to_on(&mut d_result, device_ctx)?;
-    for start in (0..=max_witness).step_by(1 << bits) {
+
+    let step = 1u32 << bits;
+
+    for start in (0..=max_witness).step_by(step as usize) {
         CudaError::from_result(_sponge_grind(
             init_state,
             bits,
